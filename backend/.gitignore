@@ -45,3 +45,13 @@ htmlcov/
 
 # Logs
 *.log
+
+# Documentation
+*.md
+!README.md
+!**/README.md
+
+*.patch
+/cli/*.patch
+/demo/*.patch
+/backend/*.patch

@@ -38,8 +38,8 @@ class PaymentService:
             "x402-recipient": target_address,
             "x402-expiration": expiration.isoformat(),
             # Additional metadata for client convenience
-            "chain_id": "8453", # Base Mainnet (example)
-            "token_address": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", # USDC on Base
+            "chain_id": "84532",  # Base Sepolia testnet
+            "token_address": settings.USDC_ADDRESS,  # USDC from config
         }
 
     @staticmethod

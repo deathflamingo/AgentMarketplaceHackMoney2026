@@ -207,13 +207,16 @@ cmd_list_services() {
 cmd_hire() {
     if [ -z "$ARG_service_id" ] || [ -z "$ARG_title" ]; then
         log_error "Missing required parameters: --service-id, --title"
-        echo "Usage: hire --service-id SERVICE_ID --title 'Job title' [--input 'json']"
+        echo "Usage: hire --service-id SERVICE_ID --title 'Job title' [--input 'json'] [--payment-method 'x402'|'balance'] [--tx-hash '0x...']"
         return 1
     fi
 
     log_info "Hiring service (creating job)..."
 
     local input_data="${ARG_input:-{}}"
+    local payment_method="${ARG_payment_method:-x402}"
+    local tx_hash="${ARG_tx_hash:-}"
+    local api_key=$(get_api_key)
 
     local data=$(jq -n \
         --arg service_id "$ARG_service_id" \
@@ -225,11 +228,58 @@ cmd_hire() {
             input_data: $input
         }')
 
-    local response
-    response=$(api_request POST "/jobs" "$data")
-    if [ $? -eq 0 ]; then
+    # Build curl options
+    local curl_opts=(-s -w "\n%{http_code}")
+    curl_opts+=(-H "X-Agent-Key: $api_key")
+    curl_opts+=(-H "Content-Type: application/json")
+    curl_opts+=(-H "x-payment-method: $payment_method")
+
+    # Add payment proof if provided
+    if [ -n "$tx_hash" ]; then
+        curl_opts+=(-H "x402-payment-proof: $tx_hash")
+    fi
+
+    curl_opts+=(-X POST)
+    curl_opts+=(-d "$data")
+
+    local response=$(curl "${curl_opts[@]}" "${API_URL}/jobs")
+    local http_code=$(echo "$response" | tail -n1)
+    local body=$(echo "$response" | sed '$d')
+
+    if [ "$http_code" = "402" ]; then
+        # x402 Payment Required
+        log_warning "Payment Required (HTTP 402)"
+        echo ""
+        echo "$body" | jq '.'
+        echo ""
+
+        local amount=$(echo "$body" | jq -r '.payment.amount')
+        local recipient=$(echo "$body" | jq -r '.payment.recipient')
+        local token=$(echo "$body" | jq -r '.payment.token_address')
+        local chain_id=$(echo "$body" | jq -r '.payment.chain_id')
+
+        echo -e "${YELLOW}To complete this hire, send payment:${NC}"
+        echo ""
+        echo "  Amount:    $amount USDC"
+        echo "  To:        $recipient"
+        echo "  Token:     $token"
+        echo "  Network:   Base Sepolia (Chain ID: $chain_id)"
+        echo ""
+        echo "After sending, retry with payment proof:"
+        echo ""
+        echo -e "${GREEN}  ./agentmarket.sh hire \\"
+        echo "    --service-id '$ARG_service_id' \\"
+        echo "    --title '$ARG_title' \\"
+        echo -e "    --tx-hash '0xYourTransactionHash'${NC}"
+        return 1
+    elif [ "$http_code" -ge 200 ] && [ "$http_code" -lt 300 ]; then
         log_success "Job created! Service hired."
-        echo "$response" | jq '.'
+        echo "$body" | jq '.'
+        return 0
+    else
+        log_error "Failed to hire service (HTTP $http_code)"
+        echo "$body" | jq -r '.detail // .message // .'
+        return 1
     fi
 }
 
@@ -443,7 +493,8 @@ main() {
         echo "  verify-payment     - Verify an on-chain payment (use --tx-hash, --amount)"
         echo "  create-service     - Create a service you can provide"
         echo "  list-services      - List available services"
-        echo "  hire               - Hire a service (create job)"
+        echo "  hire               - Hire a service with x402 or balance payment"
+        echo "                       Options: --payment-method [x402|balance] --tx-hash [0x...]"
         echo "  list-jobs          - List all jobs"
         echo "  job-details        - Get job details"
         echo "  start              - Start working on a job"

@@ -6,6 +6,7 @@ from app.models.job import Job
 from app.models.deliverable import Deliverable
 from app.models.message import Message
 from app.models.activity_log import ActivityLog
+from app.models.payment_transaction import PaymentTransaction, TransactionStatus, TransactionType
 
 __all__ = [
     "Agent",
@@ -14,4 +15,7 @@ __all__ = [
     "Deliverable",
     "Message",
     "ActivityLog",
+    "PaymentTransaction",
+    "TransactionStatus",
+    "TransactionType",
 ]

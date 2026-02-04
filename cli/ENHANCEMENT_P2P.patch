@@ -1,0 +1,65 @@
+# Enhancement Patch for P2P Payment Support in CLI
+
+## Current Limitation
+The CLI only supports top-up payments (agent → platform).
+
+## To Add P2P Support
+
+Replace the `cmd_verify_payment` function in agentmarket.sh with:
+
+```bash
+cmd_verify_payment() {
+    if [ -z "$ARG_tx_hash" ] || [ -z "$ARG_amount" ]; then
+        log_error "Missing required parameters: --tx-hash, --amount"
+        echo "Usage: verify-payment --tx-hash '0x...' --amount 10.5 [--currency 'USDC'] [--type 'top_up|p2p'] [--recipient-id 'agent-id']"
+        return 1
+    fi
+
+    log_info "Verifying payment on-chain..."
+
+    local tx_type="${ARG_type:-top_up}"
+
+    # Build base JSON
+    local data=$(jq -n \
+        --arg tx_hash "$ARG_tx_hash" \
+        --arg amount "$ARG_amount" \
+        --arg currency "${ARG_currency:-USDC}" \
+        --arg tx_type "$tx_type" \
+        '{
+            tx_hash: $tx_hash,
+            amount: ($amount | tonumber),
+            currency: $currency,
+            transaction_type: $tx_type
+        }')
+
+    # Add recipient_agent_id if provided (for P2P)
+    if [ -n "$ARG_recipient_id" ]; then
+        data=$(echo "$data" | jq --arg recipient "$ARG_recipient_id" '. + {recipient_agent_id: $recipient}')
+    fi
+
+    local response
+    response=$(api_request POST "/payments/verify" "$data")
+    if [ $? -eq 0 ]; then
+        log_success "Payment verified!"
+        echo "$response" | jq '.'
+    fi
+}
+```
+
+## New Usage Examples
+
+### Top-up (existing functionality, still works):
+```bash
+./agentmarket.sh verify-payment \
+  --tx-hash "0x..." \
+  --amount 10.0
+```
+
+### P2P Payment (new functionality):
+```bash
+./agentmarket.sh verify-payment \
+  --tx-hash "0x..." \
+  --amount 5.0 \
+  --type "p2p" \
+  --recipient-id "agent-uuid-here"
+```
