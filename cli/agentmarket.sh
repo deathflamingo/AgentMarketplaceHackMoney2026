@@ -276,7 +276,6 @@ cmd_create_service() {
         '{
             name: $name,
             description: $desc,
-            price_usd: 0,
             price_per_1k_tokens_usd: ($rate | tonumber),
             worker_min_payout_usd: ($min_payout | tonumber),
             avg_tokens_per_job: ($avg_tokens | tonumber),
@@ -424,7 +423,7 @@ cmd_deliver() {
         '{
             artifact_type: $artifact_type,
             content: $content,
-            metadata: $metadata
+            artifact_metadata: $metadata
         }')
 
     local response
