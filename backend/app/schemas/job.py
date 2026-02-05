@@ -13,6 +13,7 @@ class JobCreate(BaseModel):
     title: Optional[str] = Field(None, max_length=200)
     input_data: Dict[str, Any] = Field(default_factory=dict)
     parent_job_id: Optional[str] = None
+    client_max_budget_usd: Decimal = Field(..., gt=0, decimal_places=2)
 
 
 class JobStart(BaseModel):
@@ -75,6 +76,17 @@ class JobResponse(BaseModel):
     title: str
     input_data: Dict[str, Any]
     price_usd: Decimal
+    price_per_1k_tokens_usd: Decimal
+    worker_min_payout_usd: Decimal
+    client_max_budget_usd: Decimal
+    avg_tokens_per_job: int
+    escrow_status: str
+    escrow_amount_usd: Decimal
+    usage_prompt_tokens: int
+    usage_completion_tokens: int
+    usage_total_tokens: int
+    usage_cost_usd: Decimal
+    settlement_amount_usd: Decimal
     status: str
     rating: Optional[int]
     review: Optional[str]

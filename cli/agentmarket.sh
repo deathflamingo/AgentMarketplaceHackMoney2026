@@ -7,9 +7,11 @@ set -e
 
 # Configuration
 API_URL="${AGENTMARKET_API_URL:-http://localhost:8000/api}"
+GATEWAY_URL="${AGENTMARKET_GATEWAY_URL:-http://localhost:8010}"
 CONFIG_DIR="${HOME}/.agentmarket"
 API_KEY_FILE="${CONFIG_DIR}/api_key"
 AGENT_ID_FILE="${CONFIG_DIR}/agent_id"
+CONFIG_FILE="${CONFIG_DIR}/config"
 
 # Colors for output
 RED='\033[0;31m'
@@ -20,6 +22,21 @@ NC='\033[0m' # No Color
 
 # Ensure config directory exists
 mkdir -p "$CONFIG_DIR"
+
+# Load persisted config (if present)
+if [ -f "$CONFIG_FILE" ]; then
+    # shellcheck disable=SC1090
+    source "$CONFIG_FILE"
+fi
+
+# Persist config
+save_config() {
+    {
+        echo "API_URL='${API_URL}'"
+        echo "GATEWAY_URL='${GATEWAY_URL}'"
+    } > "$CONFIG_FILE"
+    chmod 600 "$CONFIG_FILE"
+}
 
 # Helper functions
 log_info() {
@@ -36,6 +53,17 @@ log_error() {
 
 log_warning() {
     echo -e "${YELLOW}[WARNING]${NC} $1"
+}
+
+require_json() {
+    local label="$1"
+    local value="$2"
+    if ! echo "$value" | jq -e . >/dev/null 2>&1; then
+        log_error "Invalid JSON for $label"
+        echo "$value"
+        return 1
+    fi
+    return 0
 }
 
 # Get API key from file
@@ -107,7 +135,15 @@ parse_args() {
             --*)
                 local key="${1#--}"
                 local value="$2"
-                eval "ARG_${key//-/_}='$value'"
+                # Support boolean flags (no value or next is another flag)
+                if [ -z "$value" ] || [[ "$value" == --* ]]; then
+                    value="true"
+                    printf -v "ARG_${key//-/_}" '%s' "$value"
+                    shift 1
+                    continue
+                fi
+                # Avoid eval so JSON strings / quotes are preserved safely
+                printf -v "ARG_${key//-/_}" '%s' "$value"
                 shift 2
                 ;;
             *)
@@ -121,6 +157,33 @@ parse_args() {
 
 # Command implementations
 
+cmd_config() {
+    if [ -n "$ARG_api_url" ]; then
+        API_URL="$ARG_api_url"
+    fi
+    if [ -n "$ARG_gateway_url" ]; then
+        GATEWAY_URL="$ARG_gateway_url"
+    fi
+
+    save_config
+
+    log_success "Config updated"
+    echo "API_URL:     $API_URL"
+    echo "GATEWAY_URL: $GATEWAY_URL"
+}
+
+cmd_login() {
+    if [ -z "$ARG_api_key" ] || [ -z "$ARG_agent_id" ]; then
+        log_error "Missing required parameters: --api-key, --agent-id"
+        echo "Usage: login --api-key 'agmkt_sk_...' --agent-id 'uuid'"
+        return 1
+    fi
+
+    save_credentials "$ARG_api_key" "$ARG_agent_id"
+    log_success "Credentials saved"
+    echo "Agent ID: $ARG_agent_id"
+}
+
 cmd_register() {
     log_info "Registering agent..."
 
@@ -128,6 +191,10 @@ cmd_register() {
         log_error "Missing required parameters: --name, --capabilities"
         echo "Usage: register --name 'AgentName' --capabilities 'cap1,cap2' [--description 'desc'] [--wallet '0x...']"
         return 1
+    fi
+
+    if [ "${ARG_auto_suffix:-false}" = "true" ]; then
+        ARG_name="${ARG_name}_$(date +%s)"
     fi
 
     local data=$(jq -n \
@@ -163,18 +230,45 @@ cmd_register() {
 cmd_create_service() {
     log_info "Creating service..."
 
-    if [ -z "$ARG_name" ] || [ -z "$ARG_price" ] || [ -z "$ARG_capabilities" ]; then
-        log_error "Missing required parameters: --name, --price, --capabilities"
-        echo "Usage: create-service --name 'Service Name' --price 10.00 --capabilities 'cap1,cap2'"
-        echo "  [--description 'desc'] [--output-type 'text|code|json|file|image_url']"
-        echo "  [--output-description 'desc'] [--estimated-minutes 30]"
+    if [ -z "$ARG_name" ] || [ -z "$ARG_capabilities" ]; then
+        log_error "Missing required parameters: --name, --capabilities"
+        echo "Usage: create-service --name 'Service Name' --capabilities 'cap1,cap2'"
+        echo "  Token pricing:"
+        echo "    --rate 0.50              (price_per_1k_tokens_usd)"
+        echo "    --min 5.00               (worker_min_payout_usd)"
+        echo "    --avg-tokens 2000        (avg_tokens_per_job, optional)"
+        echo "  Optional:"
+        echo "    --description 'desc' --output-type 'text|code|json|file|image_url'"
+        echo "    --output-description 'desc' --estimated-minutes 30"
+        return 1
+    fi
+
+    local rate="${ARG_rate:-}"
+    local min_payout="${ARG_min:-}"
+    local avg_tokens="${ARG_avg_tokens:-0}"
+
+    # Back-compat flags
+    if [ -z "$rate" ] && [ -n "$ARG_price_per_1k_tokens_usd" ]; then
+        rate="$ARG_price_per_1k_tokens_usd"
+    fi
+    if [ -z "$min_payout" ] && [ -n "$ARG_worker_min_payout_usd" ]; then
+        min_payout="$ARG_worker_min_payout_usd"
+    fi
+    if [ "$avg_tokens" = "0" ] && [ -n "$ARG_avg_tokens_per_job" ]; then
+        avg_tokens="$ARG_avg_tokens_per_job"
+    fi
+
+    if [ -z "$rate" ] || [ -z "$min_payout" ]; then
+        log_error "Missing required pricing parameters: --rate, --min"
         return 1
     fi
 
     local data=$(jq -n \
         --arg name "$ARG_name" \
         --arg desc "${ARG_description:-Service description}" \
-        --arg price "$ARG_price" \
+        --arg rate "$rate" \
+        --arg min_payout "$min_payout" \
+        --arg avg_tokens "$avg_tokens" \
         --arg output_type "${ARG_output_type:-text}" \
         --arg output_desc "${ARG_output_description:-Service output}" \
         --arg caps "$ARG_capabilities" \
@@ -182,7 +276,10 @@ cmd_create_service() {
         '{
             name: $name,
             description: $desc,
-            price_usd: ($price | tonumber),
+            price_usd: 0,
+            price_per_1k_tokens_usd: ($rate | tonumber),
+            worker_min_payout_usd: ($min_payout | tonumber),
+            avg_tokens_per_job: ($avg_tokens | tonumber),
             output_type: $output_type,
             output_description: $output_desc,
             required_inputs: [],
@@ -194,7 +291,11 @@ cmd_create_service() {
     response=$(api_request POST "/services" "$data")
     if [ $? -eq 0 ]; then
         log_success "Service created successfully!"
-        echo "$response" | jq '.'
+        if [ "${ARG_json:-false}" = "true" ]; then
+            echo "$response"
+        else
+            echo "$response" | jq '.'
+        fi
     fi
 }
 
@@ -204,7 +305,7 @@ cmd_list_services() {
     local response
     response=$(api_request GET "/services" "")
     if [ $? -eq 0 ]; then
-        echo "$response" | jq -r '.[] | "ID: \(.id) | \(.name) | $\(.price_usd) | Provider: \(.provider_id)"'
+        echo "$response" | jq -r '.[] | "ID: \(.id) | \(.name) | rate:\(.price_per_1k_tokens_usd)/1k | min:\(.worker_min_payout_usd) | avg_tokens:\(.avg_tokens_per_job) | by: \(.agent_name)"'
     fi
 }
 
@@ -221,86 +322,45 @@ cmd_search_services() {
     local response
     response=$(api_request GET "/services$query_part" "")
     if [ $? -eq 0 ]; then
-        echo "$response" | jq -r '.[] | "ID: \(.id) | \(.name) | $\(.price_usd) | \(.description)"'
+        echo "$response" | jq -r '.[] | "ID: \(.id) | \(.name) | rate:\(.price_per_1k_tokens_usd)/1k | min:\(.worker_min_payout_usd) | \(.description)"'
     fi
 }
 
 cmd_hire() {
-    if [ -z "$ARG_service_id" ] || [ -z "$ARG_title" ]; then
-        log_error "Missing required parameters: --service-id, --title"
-        echo "Usage: hire --service-id SERVICE_ID --title 'Job title' [--input 'json'] [--payment-method 'x402'|'balance'] [--tx-hash '0x...']"
+    if [ -z "$ARG_service_id" ] || [ -z "$ARG_max_budget" ]; then
+        log_error "Missing required parameters: --service-id, --max-budget"
+        echo "Usage: hire --service-id SERVICE_ID --max-budget 25.00 [--title 'Job title'] [--input '{\"k\":\"v\"}']"
         return 1
     fi
 
     log_info "Hiring service (creating job)..."
 
     local input_data="${ARG_input:-{}}"
-    local payment_method="${ARG_payment_method:-x402}"
-    local tx_hash="${ARG_tx_hash:-}"
-    local api_key=$(get_api_key)
+    local title="${ARG_title:-Hire service}"
+
+    require_json "--input" "$input_data" || return 1
 
     local data=$(jq -n \
         --arg service_id "$ARG_service_id" \
-        --arg title "$ARG_title" \
+        --arg title "$title" \
+        --arg max_budget "$ARG_max_budget" \
         --argjson input "$input_data" \
         '{
             service_id: $service_id,
             title: $title,
+            client_max_budget_usd: ($max_budget | tonumber),
             input_data: $input
         }')
 
-    # Build curl options
-    local curl_opts=(-s -w "\n%{http_code}")
-    curl_opts+=(-H "X-Agent-Key: $api_key")
-    curl_opts+=(-H "Content-Type: application/json")
-    curl_opts+=(-H "x-payment-method: $payment_method")
-
-    # Add payment proof if provided
-    if [ -n "$tx_hash" ]; then
-        curl_opts+=(-H "x402-payment-proof: $tx_hash")
-    fi
-
-    curl_opts+=(-X POST)
-    curl_opts+=(-d "$data")
-
-    local response=$(curl "${curl_opts[@]}" "${API_URL}/jobs")
-    local http_code=$(echo "$response" | tail -n1)
-    local body=$(echo "$response" | sed '$d')
-
-    if [ "$http_code" = "402" ]; then
-        # x402 Payment Required
-        log_warning "Payment Required (HTTP 402)"
-        echo ""
-        echo "$body" | jq '.'
-        echo ""
-
-        local amount=$(echo "$body" | jq -r '.payment.amount')
-        local recipient=$(echo "$body" | jq -r '.payment.recipient')
-        local token=$(echo "$body" | jq -r '.payment.token_address')
-        local chain_id=$(echo "$body" | jq -r '.payment.chain_id')
-
-        echo -e "${YELLOW}To complete this hire, send payment:${NC}"
-        echo ""
-        echo "  Amount:    $amount USDC"
-        echo "  To:        $recipient"
-        echo "  Token:     $token"
-        echo "  Network:   Base Sepolia (Chain ID: $chain_id)"
-        echo ""
-        echo "After sending, retry with payment proof:"
-        echo ""
-        echo -e "${GREEN}  ./agentmarket.sh hire \\"
-        echo "    --service-id '$ARG_service_id' \\"
-        echo "    --title '$ARG_title' \\"
-        echo -e "    --tx-hash '0xYourTransactionHash'${NC}"
-        return 1
-    elif [ "$http_code" -ge 200 ] && [ "$http_code" -lt 300 ]; then
-        log_success "Job created! Service hired."
-        echo "$body" | jq '.'
-        return 0
-    else
-        log_error "Failed to hire service (HTTP $http_code)"
-        echo "$body" | jq -r '.detail // .message // .'
-        return 1
+    local response
+    response=$(api_request POST "/jobs" "$data")
+    if [ $? -eq 0 ]; then
+        log_success "Job created! Escrow funded."
+        if [ "${ARG_json:-false}" = "true" ]; then
+            echo "$response"
+        else
+            echo "$response" | jq '.'
+        fi
     fi
 }
 
@@ -310,7 +370,7 @@ cmd_list_jobs() {
     local response
     response=$(api_request GET "/jobs" "")
     if [ $? -eq 0 ]; then
-        echo "$response" | jq -r '.[] | "ID: \(.id) | \(.title) | Status: \(.status) | $\(.price_usd)"'
+        echo "$response" | jq -r '.[] | "ID: \(.id) | \(.title) | Status: \(.status) | escrow:\(.escrow_status) \(.escrow_amount_usd) | used:\(.usage_cost_usd)"'
     fi
 }
 
@@ -355,6 +415,7 @@ cmd_deliver() {
     log_info "Delivering work..."
 
     local metadata="${ARG_metadata:-{}}"
+    require_json "--metadata" "$metadata" || return 1
 
     local data=$(jq -n \
         --arg artifact_type "${ARG_artifact_type:-text}" \
@@ -395,7 +456,11 @@ cmd_complete() {
     response=$(api_request POST "/jobs/$ARG_job_id/complete" "$data")
     if [ $? -eq 0 ]; then
         log_success "Job completed and rated!"
-        echo "$response" | jq '.'
+        if [ "${ARG_json:-false}" = "true" ]; then
+            echo "$response"
+        else
+            echo "$response" | jq '.'
+        fi
     fi
 }
 
@@ -462,12 +527,14 @@ cmd_balance() {
     response=$(api_request GET "/agents/me" "")
     if [ $? -eq 0 ]; then
         local balance=$(echo "$response" | jq -r '.balance')
+        local escrow=$(echo "$response" | jq -r '.escrow_balance // 0')
         local wallet=$(echo "$response" | jq -r '.wallet_address')
         local earned=$(echo "$response" | jq -r '.total_earned')
         local spent=$(echo "$response" | jq -r '.total_spent')
         
         log_success "Balance Info:"
         echo "  Internal Balance: $balance USDC"
+        echo "  Escrow Balance:   $escrow USDC"
         echo "  Wallet Address:   $wallet"
         echo "  Total Earned:     $earned USDC"
         echo "  Total Spent:      $spent USDC"
@@ -477,7 +544,7 @@ cmd_balance() {
 cmd_verify_payment() {
     if [ -z "$ARG_tx_hash" ] || [ -z "$ARG_amount" ]; then
         log_error "Missing required parameters: --tx-hash, --amount"
-        echo "Usage: verify-payment --tx-hash '0x...' --amount 10.5 [--currency 'USDC']"
+        echo "Usage: verify-payment --tx-hash '0x...' --amount 10.5 [--currency 'USDC'] [--token-address '0x...']"
         return 1
     fi
 
@@ -487,10 +554,13 @@ cmd_verify_payment() {
         --arg tx_hash "$ARG_tx_hash" \
         --arg amount "$ARG_amount" \
         --arg currency "${ARG_currency:-USDC}" \
+        --arg token_address "${ARG_token_address:-}" \
         '{
             tx_hash: $tx_hash,
             amount: ($amount | tonumber),
-            currency: $currency
+            currency: $currency,
+            transaction_type: "top_up",
+            token_address: (if $token_address != "" then $token_address else null end)
         }')
 
     local response
@@ -501,6 +571,89 @@ cmd_verify_payment() {
     fi
 }
 
+cmd_llm_key() {
+    if [ -z "$ARG_provider" ] || [ -z "$ARG_api_key" ]; then
+        log_error "Missing required parameters: --provider, --api-key"
+        echo "Usage: llm-key --provider openai|anthropic --api-key 'sk-...'"
+        return 1
+    fi
+
+    local data
+    data=$(jq -n --arg provider "$ARG_provider" --arg api_key "$ARG_api_key" '{provider: $provider, api_key: $api_key}')
+    local response
+    response=$(api_request POST "/llm/credentials" "$data")
+    if [ $? -eq 0 ]; then
+        log_success "LLM credential saved"
+        echo "$response" | jq '.'
+    fi
+}
+
+cmd_llm_chat() {
+    if [ -z "$ARG_job_id" ] || [ -z "$ARG_provider" ] || [ -z "$ARG_model" ] || [ -z "$ARG_prompt" ]; then
+        log_error "Missing required parameters: --job-id, --provider, --model, --prompt"
+        echo "Usage: llm-chat --job-id JOB_ID --provider openai|anthropic --model MODEL --prompt 'text' [--system 'text'] [--max-tokens 500]"
+        return 1
+    fi
+
+    local api_key
+    api_key=$(get_api_key)
+    if [ -z "$api_key" ]; then
+        log_error "Not logged in. Run 'register' or 'login' first."
+        return 1
+    fi
+
+    local system="${ARG_system:-You are a helpful assistant.}"
+    local max_tokens="${ARG_max_tokens:-512}"
+    local temperature="${ARG_temperature:-0.2}"
+
+    local data
+    data=$(jq -n \
+        --arg job_id "$ARG_job_id" \
+        --arg provider "$ARG_provider" \
+        --arg model "$ARG_model" \
+        --arg system "$system" \
+        --arg prompt "$ARG_prompt" \
+        --arg max_tokens "$max_tokens" \
+        --arg temperature "$temperature" \
+        '{
+            job_id: $job_id,
+            provider: $provider,
+            model: $model,
+            messages: [
+                {role: "system", content: $system},
+                {role: "user", content: $prompt}
+            ],
+            max_tokens: ($max_tokens | tonumber),
+            temperature: ($temperature | tonumber)
+        }')
+
+    local response
+    response=$(curl -s -w "\n%{http_code}" \
+        -H "X-Agent-Key: $api_key" \
+        -H "Content-Type: application/json" \
+        -X POST \
+        -d "$data" \
+        "${GATEWAY_URL}/v1/llm/chat")
+
+    local http_code
+    http_code=$(echo "$response" | tail -n1)
+    local body
+    body=$(echo "$response" | sed '$d')
+
+    if [ "$http_code" -ge 200 ] && [ "$http_code" -lt 300 ]; then
+        if [ "${ARG_json:-false}" = "true" ]; then
+            echo "$body"
+        else
+            echo "$body" | jq '.'
+        fi
+        return 0
+    fi
+
+    log_error "Gateway request failed (HTTP $http_code)"
+    echo "$body" | jq -r '.detail // .message // .' 2>/dev/null || echo "$body"
+    return 1
+}
+
 # Main command dispatcher
 main() {
     if [ $# -eq 0 ]; then
@@ -508,19 +661,22 @@ main() {
         echo "Usage: $0 <command> [options]"
         echo ""
         echo "Commands:"
+        echo "  config             - Set API URLs (use --api-url, --gateway-url)"
+        echo "  login              - Save existing credentials (use --api-key, --agent-id)"
         echo "  register           - Register as a new agent"
         echo "  search-agents      - Search agents (use --q 'query')"
         echo "  balance            - Check your balance and stats"
         echo "  verify-payment     - Verify an on-chain payment (use --tx-hash, --amount)"
         echo "  create-service     - Create a service you can provide"
         echo "  list-services      - List available services"
-        echo "  hire               - Hire a service with x402 or balance payment"
-        echo "                       Options: --payment-method [x402|balance] --tx-hash [0x...]"
+        echo "  hire               - Hire a service (escrow-based, use --service-id, --max-budget)"
         echo "  list-jobs          - List all jobs"
         echo "  job-details        - Get job details"
         echo "  start              - Start working on a job"
         echo "  deliver            - Deliver completed work"
         echo "  complete           - Complete and rate a job (client)"
+        echo "  llm-key            - Save BYOK LLM key (use --provider, --api-key)"
+        echo "  llm-chat           - Call the metered LLM gateway (use --job-id, --provider, --model, --prompt)"
         echo "  inbox              - Check your messages"
         echo "  profile            - View your agent profile"
         echo "  stats              - View platform statistics"
@@ -535,6 +691,12 @@ main() {
 
     # Dispatch to command handler
     case "$command" in
+        config)
+            cmd_config
+            ;;
+        login)
+            cmd_login
+            ;;
         register)
             cmd_register
             ;;
@@ -573,6 +735,12 @@ main() {
             ;;
         complete)
             cmd_complete
+            ;;
+        llm-key)
+            cmd_llm_key
+            ;;
+        llm-chat)
+            cmd_llm_chat
             ;;
         inbox)
             cmd_inbox

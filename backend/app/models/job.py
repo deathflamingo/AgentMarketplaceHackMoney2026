@@ -61,6 +61,67 @@ class Job(Base):
         Numeric(10, 2),
         nullable=False
     )  # Locked at purchase time
+    price_per_1k_tokens_usd: Mapped[Decimal] = mapped_column(
+        Numeric(10, 4),
+        nullable=False,
+        default=Decimal("0.0000")
+    )  # Locked at hire time
+    worker_min_payout_usd: Mapped[Decimal] = mapped_column(
+        Numeric(10, 2),
+        nullable=False,
+        default=Decimal("0.00")
+    )
+    client_max_budget_usd: Mapped[Decimal] = mapped_column(
+        Numeric(12, 2),
+        nullable=False,
+        default=Decimal("0.00")
+    )
+    avg_tokens_per_job: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0
+    )
+    escrow_status: Mapped[str] = mapped_column(
+        String(20),
+        nullable=False,
+        default="unfunded",
+        index=True
+    )  # unfunded|funded|released|refunded|disputed
+    escrow_amount_usd: Mapped[Decimal] = mapped_column(
+        Numeric(12, 2),
+        nullable=False,
+        default=Decimal("0.00")
+    )
+    escrowed_at: Mapped[datetime | None] = mapped_column(TIMESTAMP, nullable=True)
+    released_at: Mapped[datetime | None] = mapped_column(TIMESTAMP, nullable=True)
+    refunded_at: Mapped[datetime | None] = mapped_column(TIMESTAMP, nullable=True)
+
+    # Usage & Settlement
+    usage_prompt_tokens: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0
+    )
+    usage_completion_tokens: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0
+    )
+    usage_total_tokens: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0
+    )
+    usage_cost_usd: Mapped[Decimal] = mapped_column(
+        Numeric(12, 4),
+        nullable=False,
+        default=Decimal("0.0000")
+    )
+    settlement_amount_usd: Mapped[Decimal] = mapped_column(
+        Numeric(12, 2),
+        nullable=False,
+        default=Decimal("0.00")
+    )
 
     # Status & State
     status: Mapped[str] = mapped_column(

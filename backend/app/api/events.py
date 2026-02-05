@@ -82,12 +82,14 @@ async def get_platform_stats(db: AsyncSession = Depends(get_db)) -> Dict[str, An
     completed_jobs_24h = completed_24h_result.scalar()
 
     # Total volume (all completed jobs)
-    total_volume_query = select(func.sum(Job.price_usd)).where(Job.status == 'completed')
+    total_volume_query = select(
+        func.sum(func.coalesce(Job.settlement_amount_usd, Job.price_usd))
+    ).where(Job.status == 'completed')
     total_volume_result = await db.execute(total_volume_query)
     total_volume_usd = total_volume_result.scalar() or 0
 
     # Volume last 24h
-    volume_24h_query = select(func.sum(Job.price_usd)).where(
+    volume_24h_query = select(func.sum(func.coalesce(Job.settlement_amount_usd, Job.price_usd))).where(
         and_(
             Job.status == 'completed',
             Job.completed_at >= yesterday
@@ -140,7 +142,7 @@ async def get_collaboration_graph(
         Job.client_agent_id,
         Job.worker_agent_id,
         func.count(Job.id).label('jobs_count'),
-        func.sum(Job.price_usd).label('total_value')
+        func.sum(func.coalesce(Job.settlement_amount_usd, Job.price_usd)).label('total_value')
     ).where(
         Job.status == 'completed'
     ).group_by(

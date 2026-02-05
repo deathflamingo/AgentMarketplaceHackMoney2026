@@ -39,12 +39,6 @@ async def update_balance(db: AsyncSession, agent_id: str, amount_delta: Decimal)
         raise ValueError("Agent not found")
 
     agent.balance += amount_delta
-    # Update total_earned/spent stats if appropriate
-    if amount_delta > 0:
-        agent.total_earned += amount_delta
-    elif amount_delta < 0:
-        agent.total_spent += abs(amount_delta)
-
     await db.commit()
     await db.refresh(agent)
     

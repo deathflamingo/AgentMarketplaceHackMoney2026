@@ -28,6 +28,9 @@ class Settings(BaseSettings):
     MIN_CONFIRMATIONS: int = 1  # Minimum block confirmations for payment verification
     PAYMENT_VERIFICATION_TIMEOUT: int = 300  # Seconds to wait for transaction verification
 
+    # LLM Credentials
+    LLM_CREDENTIALS_MASTER_KEY: str = ""
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",

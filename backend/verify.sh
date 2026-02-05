@@ -39,6 +39,29 @@ echo "  Agent ID: $CLIENT_ID"
 echo "  API Key: $CLIENT_KEY"
 echo ""
 
+echo -e "${BLUE}Step 1.5: Topping up ClientBot balance...${NC}"
+VERIFY_PAYMENT_RESPONSE=$(curl -s -X POST "$BASE_URL/payments/verify" \
+  -H "X-Agent-Key: $CLIENT_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "tx_hash": "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdee",
+    "amount": 100.00,
+    "currency": "USDC"
+  }')
+
+SUCCESS=$(echo $VERIFY_PAYMENT_RESPONSE | jq -r '.success')
+NEW_BALANCE=$(echo $VERIFY_PAYMENT_RESPONSE | jq -r '.new_balance')
+
+if [ "$SUCCESS" != "true" ]; then
+  echo -e "${RED}??? Payment verification failed${NC}"
+  echo $VERIFY_PAYMENT_RESPONSE | jq
+  exit 1
+fi
+
+echo -e "${GREEN}??? Balance topped up to \$$NEW_BALANCE${NC}"
+echo ""
+echo ""
+
 echo -e "${BLUE}Step 2: Registering $WORKER_NAME...${NC}"
 WORKER_RESPONSE=$(curl -s -X POST "$BASE_URL/agents" \
   -H "Content-Type: application/json" \
@@ -67,6 +90,9 @@ SERVICE_RESPONSE=$(curl -s -X POST "$BASE_URL/services" \
     "name": "Write Compelling Copy",
     "description": "I write amazing marketing copy for your products",
     "price_usd": 10.00,
+    "price_per_1k_tokens_usd": 0.50,
+    "worker_min_payout_usd": 5.00,
+    "avg_tokens_per_job": 2000,
     "output_type": "text",
     "output_description": "Marketing copy in markdown format",
     "required_inputs": [],
@@ -92,7 +118,7 @@ echo -e "${BLUE}Step 4: ClientBot hiring service...${NC}"
 JOB_RESPONSE=$(curl -s -X POST "$BASE_URL/jobs" \
   -H "X-Agent-Key: $CLIENT_KEY" \
   -H "Content-Type: application/json" \
-  -d "{\"service_id\": \"$SERVICE_ID\", \"title\": \"Write copy for my SaaS product\", \"input_data\": {\"product\": \"AgentMarket\", \"target_audience\": \"AI developers\"}}")
+  -d "{\"service_id\": \"$SERVICE_ID\", \"title\": \"Write copy for my SaaS product\", \"client_max_budget_usd\": 25.00, \"input_data\": {\"product\": \"AgentMarket\", \"target_audience\": \"AI developers\"}}")
 
 JOB_ID=$(echo $JOB_RESPONSE | jq -r '.id')
 
@@ -224,20 +250,6 @@ fi
 echo -e "${GREEN}✓ Search found $SEARCH_COUNT agents matching 'compelling'${NC}"
 echo ""
 
-# 11. Verify Balance Update (Top-up)
-echo -e "${BLUE}Step 12: Verifying Balance Top-up...${NC}"
-INITIAL_BALANCE=$(curl -s "$BASE_URL/agents/me" -H "X-Agent-Key: $CLIENT_KEY" | jq -r '.balance')
-echo "  Initial Balance: \$$INITIAL_BALANCE"
-
-# Top up 100 USDC
-VERIFY_PAYMENT_RESPONSE=$(curl -s -X POST "$BASE_URL/payments/verify" \
-  -H "X-Agent-Key: $CLIENT_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "tx_hash": "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
-    "amount": 100.00,
-    "currency": "USDC"
-  }')
 
 SUCCESS=$(echo $VERIFY_PAYMENT_RESPONSE | jq -r '.success')
 NEW_BALANCE=$(echo $VERIFY_PAYMENT_RESPONSE | jq -r '.new_balance')

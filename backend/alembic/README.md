@@ -9,7 +9,7 @@ pip install -r requirements.txt
 
 2. Set up your database URL in `.env`:
 ```bash
-DATABASE_URL=postgresql+asyncpg://postgres:password@localhost:5432/agentmarket
+DATABASE_URL=sqlite+aiosqlite:///./agentmarket.db
 ```
 
 ## Creating Migrations

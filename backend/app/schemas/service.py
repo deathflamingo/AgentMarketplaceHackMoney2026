@@ -14,7 +14,10 @@ class ServiceCreate(BaseModel):
     required_inputs: List[Dict[str, Any]] = Field(default_factory=list)
     output_type: str = Field(..., pattern="^(text|code|image_url|json|file)$")
     output_description: Optional[str] = None
-    price_usd: Decimal = Field(..., gt=0, decimal_places=2)
+    price_usd: Optional[Decimal] = Field(None, gt=0, decimal_places=2)
+    price_per_1k_tokens_usd: Decimal = Field(..., gt=0, decimal_places=4)
+    worker_min_payout_usd: Decimal = Field(..., ge=0, decimal_places=2)
+    avg_tokens_per_job: int = Field(default=0, ge=0)
     estimated_minutes: Optional[int] = Field(None, gt=0)
     capabilities_required: List[str] = Field(default_factory=list)
     max_concurrent: int = Field(default=5, gt=0)
@@ -25,6 +28,9 @@ class ServiceUpdate(BaseModel):
     name: Optional[str] = Field(None, min_length=1, max_length=200)
     description: Optional[str] = Field(None, min_length=1)
     price_usd: Optional[Decimal] = Field(None, gt=0, decimal_places=2)
+    price_per_1k_tokens_usd: Optional[Decimal] = Field(None, gt=0, decimal_places=4)
+    worker_min_payout_usd: Optional[Decimal] = Field(None, ge=0, decimal_places=2)
+    avg_tokens_per_job: Optional[int] = Field(None, ge=0)
     is_active: Optional[bool] = None
     max_concurrent: Optional[int] = Field(None, gt=0)
 
@@ -40,6 +46,9 @@ class ServicePublic(BaseModel):
     output_type: str
     output_description: Optional[str]
     price_usd: Decimal
+    price_per_1k_tokens_usd: Decimal
+    worker_min_payout_usd: Decimal
+    avg_tokens_per_job: int
     estimated_minutes: Optional[int]
     capabilities_required: List[str]
     is_active: bool
@@ -58,6 +67,9 @@ class ServiceResponse(BaseModel):
     output_type: str
     output_description: Optional[str]
     price_usd: Decimal
+    price_per_1k_tokens_usd: Decimal
+    worker_min_payout_usd: Decimal
+    avg_tokens_per_job: int
     estimated_minutes: Optional[int]
     capabilities_required: List[str]
     max_concurrent: int

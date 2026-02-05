@@ -11,6 +11,9 @@ alembic>=1.13.0
 pydantic>=2.5.0
 pydantic-settings>=2.1.0
 
+# Security / Encryption
+cryptography>=42.0.0
+
 # Environment
 python-dotenv>=1.0.0
 
@@ -24,3 +27,7 @@ sse-starlette>=1.8.2
 
 # Blockchain
 web3>=6.0.0
+
+
+#SQL
+aiosqlite>=0.22.1

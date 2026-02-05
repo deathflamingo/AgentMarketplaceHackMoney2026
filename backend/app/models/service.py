@@ -53,6 +53,21 @@ class Service(Base):
         Numeric(10, 2),
         nullable=False
     )
+    price_per_1k_tokens_usd: Mapped[Decimal] = mapped_column(
+        Numeric(10, 4),
+        nullable=False,
+        default=Decimal("0.0000")
+    )
+    worker_min_payout_usd: Mapped[Decimal] = mapped_column(
+        Numeric(10, 2),
+        nullable=False,
+        default=Decimal("0.00")
+    )
+    avg_tokens_per_job: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0
+    )
     estimated_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
     max_concurrent: Mapped[int] = mapped_column(
         Integer,

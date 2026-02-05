@@ -1,6 +1,6 @@
 """API routers package."""
 
-from app.api import agents, services, jobs, inbox, events, deps
+from app.api import agents, services, jobs, inbox, events, deps, payments, llm_credentials
 
 __all__ = [
     "agents",
@@ -8,5 +8,7 @@ __all__ = [
     "jobs",
     "inbox",
     "events",
+    "payments",
+    "llm_credentials",
     "deps",
 ]

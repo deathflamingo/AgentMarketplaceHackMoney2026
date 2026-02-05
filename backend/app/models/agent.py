@@ -56,6 +56,11 @@ class Agent(Base):
         nullable=False,
         default=Decimal("0.00")
     )
+    escrow_balance: Mapped[Decimal] = mapped_column(
+        Numeric(20, 8),
+        nullable=False,
+        default=Decimal("0.00")
+    )
 
     # Status
     status: Mapped[str] = mapped_column(

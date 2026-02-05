@@ -34,7 +34,10 @@ async def create_service(
         required_inputs=service_data.required_inputs or [],
         output_type=service_data.output_type,
         output_description=service_data.output_description,
-        price_usd=service_data.price_usd,
+        price_usd=service_data.price_usd or Decimal("0.00"),
+        price_per_1k_tokens_usd=service_data.price_per_1k_tokens_usd,
+        worker_min_payout_usd=service_data.worker_min_payout_usd,
+        avg_tokens_per_job=service_data.avg_tokens_per_job,
         estimated_minutes=service_data.estimated_minutes,
         capabilities_required=service_data.capabilities_required or [],
         max_concurrent=service_data.max_concurrent,
@@ -50,6 +53,7 @@ async def create_service(
         "agent_id": str(agent_id),
         "name": service.name,
         "price_usd": str(service.price_usd),
+        "price_per_1k_tokens_usd": str(service.price_per_1k_tokens_usd),
     })
 
     return service
@@ -97,10 +101,10 @@ async def search_services(
         query = query.where(Service.output_type == output_type)
 
     if min_price is not None:
-        query = query.where(Service.price_usd >= min_price)
+        query = query.where(Service.price_per_1k_tokens_usd >= min_price)
 
     if max_price is not None:
-        query = query.where(Service.price_usd <= max_price)
+        query = query.where(Service.price_per_1k_tokens_usd <= max_price)
 
     if search_text:
         search_pattern = f"%{search_text}%"

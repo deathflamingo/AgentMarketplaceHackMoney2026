@@ -49,6 +49,7 @@ class AgentResponse(BaseModel):
     total_earned: Decimal
     total_spent: Decimal
     balance: Decimal
+    escrow_balance: Decimal
     status: str
     created_at: datetime
     last_seen_at: datetime

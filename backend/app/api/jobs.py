@@ -1,9 +1,8 @@
-"""Jobs API router with x402 payment support."""
+"""Jobs API router with escrow-based payment support."""
 
 import logging
-from typing import List, Optional
-from decimal import Decimal
-from fastapi import APIRouter, Depends, HTTPException, status, Query, Header
+from typing import List
+from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, or_
 
@@ -30,8 +29,6 @@ from app.services.job_service import (
     cancel_job,
     get_job_by_id,
 )
-from app.middleware.x402 import create_x402_response, verify_x402_payment
-from app.services.agent_service import update_balance
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -41,27 +38,16 @@ router = APIRouter()
 async def hire_service(
     job_data: JobCreate,
     current_agent: Agent = Depends(get_current_agent),
-    db: AsyncSession = Depends(get_db),
-    x402_payment_proof: Optional[str] = Header(None, alias="x402-payment-proof"),
-    payment_method: Optional[str] = Header("x402", alias="x-payment-method")  # "x402" or "balance"
+    db: AsyncSession = Depends(get_db)
 ):
     """
-    Hire a service with x402 or balance payment.
+    Hire a service with escrow-based payment.
 
-    **x402 Flow (Direct Wallet Payment):**
-    1. First request without payment → Returns 402 with payment details
-    2. Client sends USDC to worker's wallet
-    3. Retry with x402-payment-proof header (tx_hash)
-    4. Service verifies on-chain and creates job
-
-    **Balance Flow (Legacy):**
-    1. Set header: x-payment-method: balance
-    2. Deducts from internal balance
-    3. Creates job immediately
-
-    Headers:
-        - x402-payment-proof: Transaction hash (for x402 payments)
-        - x-payment-method: "x402" (default) or "balance"
+    Flow:
+    1. Client specifies client_max_budget_usd when hiring.
+    2. Platform locks that amount from the client's balance into escrow.
+    3. Worker performs job.
+    4. On completion, escrow is released based on metered LLM usage and worker min payout.
     """
     try:
         # Fetch service to check price and worker
@@ -81,91 +67,22 @@ async def hire_service(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Service is not available"
             )
-
-        # Get worker's wallet address
-        result = await db.execute(
-            select(Agent).where(Agent.id == service.agent_id)
-        )
-        worker_agent = result.scalar_one_or_none()
-
-        # Determine payment method
-        if payment_method == "balance":
-            # Legacy: Use internal balance
-            logger.info(f"Job payment using internal balance: client={current_agent.id}, amount={service.price_usd}")
-
-            # Check sufficient balance
-            if current_agent.balance < service.price_usd:
-                raise HTTPException(
-                    status_code=status.HTTP_402_PAYMENT_REQUIRED,
-                    detail={
-                        "error": "insufficient_balance",
-                        "message": f"Insufficient balance. Required: {service.price_usd}, Available: {current_agent.balance}",
-                        "required": str(service.price_usd),
-                        "available": str(current_agent.balance)
-                    }
-                )
-
-            # Deduct from client
-            await update_balance(db, str(current_agent.id), -service.price_usd)
-
-            # Create job
-            job = await create_job(db, str(current_agent.id), job_data)
-
-            logger.info(f"Job created with balance payment: job_id={job.id}")
-            return job
-
-        else:
-            # x402: Direct wallet payment
-            if not x402_payment_proof:
-                # No payment proof provided - return 402 with payment details
-                logger.info(f"x402 payment required: service={service.id}, worker={worker_agent.id}")
-
-                if not worker_agent.wallet_address:
-                    raise HTTPException(
-                        status_code=status.HTTP_400_BAD_REQUEST,
-                        detail="Worker has no wallet address configured. Use x-payment-method: balance instead."
-                    )
-
-                return create_x402_response(
-                    amount=service.price_usd,
-                    recipient_address=worker_agent.wallet_address,
-                    message=f"Payment of {service.price_usd} USDC required to hire this service"
-                )
-
-            # Payment proof provided - verify it
-            logger.info(f"Verifying x402 payment: tx_hash={x402_payment_proof}, amount={service.price_usd}")
-
-            if not worker_agent.wallet_address:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Worker has no wallet address configured"
-                )
-
-            is_valid = await verify_x402_payment(
-                tx_hash=x402_payment_proof,
-                expected_amount=service.price_usd,
-                recipient_address=worker_agent.wallet_address
+        # Ensure client can fund escrow
+        if current_agent.balance < job_data.client_max_budget_usd:
+            raise HTTPException(
+                status_code=status.HTTP_402_PAYMENT_REQUIRED,
+                detail={
+                    'error': 'insufficient_balance',
+                    'message': f'Insufficient balance. Required: {job_data.client_max_budget_usd}, Available: {current_agent.balance}',
+                    'required': str(job_data.client_max_budget_usd),
+                    'available': str(current_agent.balance)
+                }
             )
 
-            if not is_valid:
-                logger.warning(f"Invalid x402 payment proof: tx_hash={x402_payment_proof}")
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Invalid payment proof. Please verify the transaction hash and amount."
-                )
+        job = await create_job(db, str(current_agent.id), job_data)
 
-            # Payment verified - create job
-            job = await create_job(db, str(current_agent.id), job_data)
-
-            # Store payment proof in job metadata
-            if job.input_data is None:
-                job.input_data = {}
-            job.input_data["x402_payment_proof"] = x402_payment_proof
-            job.input_data["x402_recipient"] = worker_agent.wallet_address
-            await db.commit()
-
-            logger.info(f"Job created with x402 payment: job_id={job.id}, tx_hash={x402_payment_proof}")
-            return job
+        logger.info(f'Job created with escrow: job_id={job.id}')
+        return job
 
     except ValueError as e:
         error_msg = str(e).lower()
@@ -182,6 +99,14 @@ async def hire_service(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail={
                     "code": "SERVICE_NOT_AVAILABLE",
+                    "message": str(e)
+                }
+            )
+        elif "budget" in error_msg or "pricing" in error_msg:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "code": "JOB_PRICING_INVALID",
                     "message": str(e)
                 }
             )

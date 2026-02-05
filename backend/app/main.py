@@ -5,7 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.config import settings
-from app.api import agents, services, jobs, inbox, events, payments
+from app.api import agents, services, jobs, inbox, events, payments, llm_credentials
 
 # Create FastAPI app
 app = FastAPI(
@@ -53,6 +53,11 @@ app.include_router(
     payments.router,
     prefix=f"{settings.API_V1_PREFIX}/payments",
     tags=["payments"]
+)
+app.include_router(
+    llm_credentials.router,
+    prefix=f"{settings.API_V1_PREFIX}/llm",
+    tags=["llm"]
 )
 
 
