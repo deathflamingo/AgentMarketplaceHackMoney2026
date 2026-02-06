@@ -93,6 +93,27 @@ class Agent(Base):
         foreign_keys="Job.worker_agent_id",
         back_populates="worker"
     )
+    deposit_transactions: Mapped[List["DepositTransaction"]] = relationship(
+        "DepositTransaction",
+        back_populates="agent",
+        cascade="all, delete-orphan"
+    )
+    withdrawal_transactions: Mapped[List["WithdrawalTransaction"]] = relationship(
+        "WithdrawalTransaction",
+        back_populates="agent",
+        cascade="all, delete-orphan"
+    )
+    price_quotes: Mapped[List["PriceQuote"]] = relationship(
+        "PriceQuote",
+        foreign_keys="PriceQuote.client_agent_id",
+        back_populates="client",
+        cascade="all, delete-orphan"
+    )
+    balance_migrations: Mapped[List["BalanceMigration"]] = relationship(
+        "BalanceMigration",
+        back_populates="agent",
+        cascade="all, delete-orphan"
+    )
 
     def __repr__(self) -> str:
         return f"<Agent(id={self.id}, name={self.name}, status={self.status})>"

@@ -43,27 +43,37 @@ async def hire_service(
     current_agent: Agent = Depends(get_current_agent),
     db: AsyncSession = Depends(get_db),
     x402_payment_proof: Optional[str] = Header(None, alias="x402-payment-proof"),
-    payment_method: Optional[str] = Header("x402", alias="x-payment-method")  # "x402" or "balance"
+    payment_method: Optional[str] = Header("balance", alias="x-payment-method")  # "balance" (default) or "x402"
 ):
     """
-    Hire a service with x402 or balance payment.
+    Hire a service with balance payment or negotiated quote.
 
-    **x402 Flow (Direct Wallet Payment):**
-    1. First request without payment → Returns 402 with payment details
-    2. Client sends USDC to worker's wallet
-    3. Retry with x402-payment-proof header (tx_hash)
-    4. Service verifies on-chain and creates job
+    **Negotiated Pricing Flow:**
+    1. Request quote: POST /api/quotes/request
+    2. Receive negotiated price (valid 1 hour)
+    3. Hire service with quote_id and agreed_price
+    4. Payment deducted from AGNT balance
 
-    **Balance Flow (Legacy):**
-    1. Set header: x-payment-method: balance
-    2. Deducts from internal balance
-    3. Creates job immediately
+    **Fixed Pricing Flow:**
+    1. Hire service without quote_id
+    2. Uses service midpoint price
+    3. Payment deducted from AGNT balance
+
+    **x402 Flow (Direct Wallet Payment - Legacy):**
+    1. Set x-payment-method: x402
+    2. First request → Returns 402 with payment details
+    3. Send USDC to worker's wallet
+    4. Retry with x402-payment-proof header
 
     Headers:
+        - x-payment-method: "balance" (default) or "x402"
         - x402-payment-proof: Transaction hash (for x402 payments)
-        - x-payment-method: "x402" (default) or "balance"
     """
     try:
+        from app.models.price_quote import PriceQuote
+        from app.config import settings
+        from datetime import datetime
+
         # Fetch service to check price and worker
         result = await db.execute(
             select(Service).where(Service.id == job_data.service_id)
@@ -88,37 +98,142 @@ async def hire_service(
         )
         worker_agent = result.scalar_one_or_none()
 
+        # Determine price (negotiated vs fixed)
+        job_price = None
+        quote = None
+        negotiation = None
+        negotiated_by = "agent"
+
+        if job_data.negotiation_id:
+            # P2P negotiation - validate and use agreed price
+            from app.models.negotiation import Negotiation
+
+            result = await db.execute(
+                select(Negotiation).where(
+                    Negotiation.id == job_data.negotiation_id,
+                    Negotiation.client_agent_id == current_agent.id,
+                    Negotiation.service_id == service.id
+                )
+            )
+            negotiation = result.scalar_one_or_none()
+
+            if not negotiation:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Negotiation not found or does not belong to you"
+                )
+
+            if negotiation.status != "agreed":
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Negotiation status is '{negotiation.status}', not 'agreed'. Cannot create job."
+                )
+
+            # Use the agreed price from negotiation
+            job_price = negotiation.current_price
+            negotiated_by = "p2p"
+
+            logger.info(f"Using P2P negotiated price: negotiation={negotiation.id}, price={job_price} AGNT")
+
+        elif job_data.quote_id:
+            # Validate quote
+            result = await db.execute(
+                select(PriceQuote).where(
+                    PriceQuote.id == job_data.quote_id,
+                    PriceQuote.client_agent_id == current_agent.id,
+                    PriceQuote.service_id == service.id
+                )
+            )
+            quote = result.scalar_one_or_none()
+
+            if not quote:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Quote not found or does not belong to you"
+                )
+
+            if quote.status == "expired" or quote.valid_until < datetime.utcnow():
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Quote has expired. Please request a new quote."
+                )
+
+            if quote.status != "pending":
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Quote already {quote.status}"
+                )
+
+            # Validate agreed price matches quote
+            if job_data.agreed_price and abs(job_data.agreed_price - quote.quoted_price) > Decimal("0.01"):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Agreed price {job_data.agreed_price} does not match quote {quote.quoted_price}"
+                )
+
+            job_price = quote.quoted_price
+            negotiated_by = "llm"
+
+            # Mark quote as accepted
+            quote.status = "accepted"
+            quote.accepted_at = datetime.utcnow()
+
+            logger.info(f"Using negotiated quote {quote.id}: price={job_price} AGNT")
+
+        else:
+            # Use service midpoint price
+            job_price = (service.min_price_agnt + service.max_price_agnt) / Decimal("2")
+            logger.info(f"Using service midpoint price: {job_price} AGNT")
+
         # Determine payment method
         if payment_method == "balance":
-            # Legacy: Use internal balance
-            logger.info(f"Job payment using internal balance: client={current_agent.id}, amount={service.price_usd}")
+            # Use internal AGNT balance
+            logger.info(f"Job payment using AGNT balance: client={current_agent.id}, amount={job_price}")
 
             # Check sufficient balance
-            if current_agent.balance < service.price_usd:
+            if current_agent.balance < job_price:
+                usdc_required = job_price / settings.USDC_TO_AGNT_RATE
                 raise HTTPException(
                     status_code=status.HTTP_402_PAYMENT_REQUIRED,
                     detail={
                         "error": "insufficient_balance",
-                        "message": f"Insufficient balance. Required: {service.price_usd}, Available: {current_agent.balance}",
-                        "required": str(service.price_usd),
-                        "available": str(current_agent.balance)
+                        "message": f"Insufficient balance. Required: {job_price} AGNT (~${usdc_required:.2f}), Available: {current_agent.balance} AGNT",
+                        "required_agnt": str(job_price),
+                        "required_usd": str(usdc_required),
+                        "available_agnt": str(current_agent.balance)
                     }
                 )
 
             # Deduct from client
-            await update_balance(db, str(current_agent.id), -service.price_usd)
+            await update_balance(db, str(current_agent.id), -job_price)
 
-            # Create job
-            job = await create_job(db, str(current_agent.id), job_data)
+            # Create job with pricing metadata
+            job = await create_job(
+                db,
+                str(current_agent.id),
+                job_data,
+                price_agnt=job_price,
+                quote_id=job_data.quote_id,
+                negotiation_id=job_data.negotiation_id,
+                negotiated_by=negotiated_by
+            )
 
-            logger.info(f"Job created with balance payment: job_id={job.id}")
-            return job
+            logger.info(f"Job created with AGNT balance payment: job_id={job.id}, price={job_price} AGNT")
+
+            # Enrich response with USD equivalent
+            job_response = JobResponse.model_validate(job)
+            job_response.price_usd = job_price / settings.USDC_TO_AGNT_RATE
+
+            return job_response
 
         else:
-            # x402: Direct wallet payment
+            # x402: Direct wallet payment (USDC)
+            # Convert AGNT price to USDC for x402 payment
+            usdc_price = job_price / settings.USDC_TO_AGNT_RATE
+
             if not x402_payment_proof:
                 # No payment proof provided - return 402 with payment details
-                logger.info(f"x402 payment required: service={service.id}, worker={worker_agent.id}")
+                logger.info(f"x402 payment required: service={service.id}, worker={worker_agent.id}, price={usdc_price} USDC")
 
                 if not worker_agent.wallet_address:
                     raise HTTPException(
@@ -127,13 +242,13 @@ async def hire_service(
                     )
 
                 return create_x402_response(
-                    amount=service.price_usd,
+                    amount=usdc_price,
                     recipient_address=worker_agent.wallet_address,
-                    message=f"Payment of {service.price_usd} USDC required to hire this service"
+                    message=f"Payment of {usdc_price:.2f} USDC required to hire this service ({job_price} AGNT equivalent)"
                 )
 
             # Payment proof provided - verify it
-            logger.info(f"Verifying x402 payment: tx_hash={x402_payment_proof}, amount={service.price_usd}")
+            logger.info(f"Verifying x402 payment: tx_hash={x402_payment_proof}, amount={usdc_price} USDC")
 
             if not worker_agent.wallet_address:
                 raise HTTPException(
@@ -143,7 +258,7 @@ async def hire_service(
 
             is_valid = await verify_x402_payment(
                 tx_hash=x402_payment_proof,
-                expected_amount=service.price_usd,
+                expected_amount=usdc_price,
                 recipient_address=worker_agent.wallet_address
             )
 
@@ -155,17 +270,32 @@ async def hire_service(
                 )
 
             # Payment verified - create job
-            job = await create_job(db, str(current_agent.id), job_data)
+            job = await create_job(
+                db,
+                str(current_agent.id),
+                job_data,
+                price_agnt=job_price,
+                quote_id=job_data.quote_id,
+                negotiation_id=job_data.negotiation_id,
+                negotiated_by=negotiated_by
+            )
 
             # Store payment proof in job metadata
             if job.input_data is None:
                 job.input_data = {}
             job.input_data["x402_payment_proof"] = x402_payment_proof
             job.input_data["x402_recipient"] = worker_agent.wallet_address
+            job.input_data["x402_usdc_amount"] = str(usdc_price)
+            job.input_data["x402_agnt_equivalent"] = str(job_price)
             await db.commit()
 
             logger.info(f"Job created with x402 payment: job_id={job.id}, tx_hash={x402_payment_proof}")
-            return job
+
+            # Enrich response with USD equivalent
+            job_response = JobResponse.model_validate(job)
+            job_response.price_usd = usdc_price
+
+            return job_response
 
     except ValueError as e:
         error_msg = str(e).lower()

@@ -89,12 +89,27 @@ async def list_agents(
 
 @router.get("/me", response_model=AgentResponse)
 async def get_current_agent_profile(
-    current_agent: Agent = Depends(get_current_agent)
+    current_agent: Agent = Depends(get_current_agent),
+    db: AsyncSession = Depends(get_db)
 ):
     """
-    Get the current authenticated agent's profile.
+    Get the current authenticated agent's profile with AGNT and USD balances.
     """
-    return current_agent
+    from app.config import settings
+
+    # Convert to response model
+    agent_response = AgentResponse.model_validate(current_agent)
+
+    # Calculate USD equivalents
+    conversion_rate = settings.USDC_TO_AGNT_RATE
+    agent_response.balance_usd = current_agent.balance / conversion_rate
+    agent_response.total_earned_usd = current_agent.total_earned / conversion_rate
+    agent_response.total_spent_usd = current_agent.total_spent / conversion_rate
+
+    # Set currency
+    agent_response.balance_currency = "AGNT"
+
+    return agent_response
 
 
 @router.get("/{agent_id}", response_model=AgentPublic)

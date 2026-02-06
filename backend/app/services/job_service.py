@@ -28,7 +28,11 @@ VALID_TRANSITIONS = {
 async def create_job(
     db: AsyncSession,
     client_agent_id: str,
-    job_data: JobCreate
+    job_data: JobCreate,
+    price_agnt: Optional[Any] = None,
+    quote_id: Optional[str] = None,
+    negotiation_id: Optional[str] = None,
+    negotiated_by: str = "agent"
 ) -> Job:
     """
     Create a new job (direct purchase of a service).
@@ -37,6 +41,10 @@ async def create_job(
         db: Database session
         client_agent_id: Client agent UUID
         job_data: Job creation data
+        price_agnt: Agreed price in AGNT (if None, uses service midpoint)
+        quote_id: Optional quote ID for LLM-negotiated pricing
+        negotiation_id: Optional negotiation ID for P2P-negotiated pricing
+        negotiated_by: "agent", "llm", or "p2p"
 
     Returns:
         Created job
@@ -44,6 +52,8 @@ async def create_job(
     Raises:
         ValueError: If service not found or not active
     """
+    from decimal import Decimal
+
     # Fetch service
     result = await db.execute(
         select(Service).where(Service.id == job_data.service_id)
@@ -56,7 +66,16 @@ async def create_job(
     if not service.is_active:
         raise ValueError("Service is not available")
 
-    # Create job with price locked from service
+    # Determine price
+    if price_agnt is None:
+        # Use service midpoint price
+        price_agnt = (service.min_price_agnt + service.max_price_agnt) / Decimal("2")
+
+    # Calculate USD price for backward compatibility
+    from app.config import settings
+    price_usd = price_agnt / settings.USDC_TO_AGNT_RATE
+
+    # Create job with price locked
     title = job_data.title or f"Hire: {service.name}"
 
     job = Job(
@@ -66,7 +85,13 @@ async def create_job(
         parent_job_id=job_data.parent_job_id,
         title=title,
         input_data=job_data.input_data,
-        price_usd=service.price_usd,  # Lock price
+        price_agnt=price_agnt,  # Lock AGNT price
+        price_usd=price_usd,  # Legacy field for backward compatibility
+        final_price_agreed=price_agnt,
+        initial_price_offer=(service.min_price_agnt + service.max_price_agnt) / Decimal("2"),
+        negotiated_by=negotiated_by,
+        quote_id=quote_id,
+        negotiation_id=negotiation_id,
         status='pending',
     )
 
@@ -85,7 +110,8 @@ async def create_job(
             "message": "You've been hired!",
             "job_id": str(job.id),
             "title": title,
-            "price_usd": str(job.price_usd),
+            "price_agnt": str(price_agnt),
+            "negotiated": negotiated_by == "llm",
         }
     )
 
@@ -98,7 +124,9 @@ async def create_job(
         data={
             "client_id": str(client_agent_id),
             "worker_id": str(service.agent_id),
-            "price_usd": str(job.price_usd),
+            "price_agnt": str(price_agnt),
+            "negotiated_by": negotiated_by,
+            "quote_id": quote_id,
         }
     )
     db.add(activity)
@@ -389,6 +417,10 @@ async def complete_job(
 
     # Update worker reputation
     await update_reputation(db, str(job.worker_agent_id), rating)
+
+    # Transfer payment to worker (AGNT balance)
+    from app.services.agent_service import update_balance
+    await update_balance(db, str(job.worker_agent_id), job.price_agnt)
 
     # Update statistics
     from app.models.agent import Agent

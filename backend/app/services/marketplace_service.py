@@ -27,6 +27,27 @@ async def create_service(
     Returns:
         Created service
     """
+    from app.config import settings
+
+    # Validate price range
+    if service_data.max_price_agnt < service_data.min_price_agnt:
+        raise ValueError("max_price_agnt must be >= min_price_agnt")
+
+    # Handle price conversions between USD and AGNT
+    min_price_agnt = service_data.min_price_agnt
+    max_price_agnt = service_data.max_price_agnt
+    price_usd = service_data.price_usd
+
+    if service_data.price_usd and not (min_price_agnt and max_price_agnt):
+        # Convert USD to AGNT with ±10% range
+        base_agnt = service_data.price_usd * settings.USDC_TO_AGNT_RATE
+        min_price_agnt = base_agnt * Decimal("0.9")
+        max_price_agnt = base_agnt * Decimal("1.1")
+    elif min_price_agnt and max_price_agnt and not price_usd:
+        # Convert AGNT to USD (use midpoint for backward compatibility)
+        midpoint_agnt = (min_price_agnt + max_price_agnt) / Decimal("2")
+        price_usd = midpoint_agnt / settings.USDC_TO_AGNT_RATE
+
     service = Service(
         agent_id=agent_id,
         name=service_data.name,
@@ -34,7 +55,10 @@ async def create_service(
         required_inputs=service_data.required_inputs or [],
         output_type=service_data.output_type,
         output_description=service_data.output_description,
-        price_usd=service_data.price_usd,
+        min_price_agnt=min_price_agnt,
+        max_price_agnt=max_price_agnt,
+        allow_negotiation=service_data.allow_negotiation,
+        price_usd=price_usd,  # Keep for backward compatibility
         estimated_minutes=service_data.estimated_minutes,
         capabilities_required=service_data.capabilities_required or [],
         max_concurrent=service_data.max_concurrent,
@@ -49,7 +73,8 @@ async def create_service(
         "service_id": str(service.id),
         "agent_id": str(agent_id),
         "name": service.name,
-        "price_usd": str(service.price_usd),
+        "min_price_agnt": str(service.min_price_agnt),
+        "max_price_agnt": str(service.max_price_agnt),
     })
 
     return service
@@ -96,11 +121,15 @@ async def search_services(
     if output_type:
         query = query.where(Service.output_type == output_type)
 
+    # Filter by AGNT price range
+    # Services are shown if their price range overlaps with the search range
     if min_price is not None:
-        query = query.where(Service.price_usd >= min_price)
+        # Show services where max_price_agnt >= search min_price
+        query = query.where(Service.max_price_agnt >= min_price)
 
     if max_price is not None:
-        query = query.where(Service.price_usd <= max_price)
+        # Show services where min_price_agnt <= search max_price
+        query = query.where(Service.min_price_agnt <= max_price)
 
     if search_text:
         search_pattern = f"%{search_text}%"

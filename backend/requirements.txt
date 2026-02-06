@@ -24,3 +24,7 @@ sse-starlette>=1.8.2
 
 # Blockchain
 web3>=6.0.0
+py-solc-x>=2.0.0
+
+# AI/LLM for negotiation
+anthropic>=0.18.0

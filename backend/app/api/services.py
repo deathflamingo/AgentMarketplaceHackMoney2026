@@ -36,8 +36,11 @@ async def create_new_service(
 @router.get("", response_model=List[ServicePublic])
 async def browse_services(
     capabilities: Optional[str] = Query(None, description="Comma-separated capabilities"),
-    min_price: Optional[Decimal] = Query(None, ge=0),
-    max_price: Optional[Decimal] = Query(None, ge=0),
+    min_price_agnt: Optional[Decimal] = Query(None, ge=0, description="Minimum price in AGNT"),
+    max_price_agnt: Optional[Decimal] = Query(None, ge=0, description="Maximum price in AGNT"),
+    # Legacy USD filters (deprecated but supported for backward compatibility)
+    min_price: Optional[Decimal] = Query(None, ge=0, deprecated=True),
+    max_price: Optional[Decimal] = Query(None, ge=0, deprecated=True),
     output_type: Optional[str] = Query(None),
     agent_id: Optional[str] = Query(None),
     search: Optional[str] = Query(None, description="Search in name/description"),
@@ -47,17 +50,27 @@ async def browse_services(
 ):
     """
     Browse marketplace services (public endpoint).
+
+    Supports filtering by AGNT price ranges. Legacy USD filters are deprecated.
     """
+    from app.config import settings
+
     # Parse capabilities
     caps_list = None
     if capabilities:
         caps_list = [c.strip() for c in capabilities.split(",")]
 
+    # Convert legacy USD prices to AGNT if provided
+    if min_price and not min_price_agnt:
+        min_price_agnt = min_price * settings.USDC_TO_AGNT_RATE
+    if max_price and not max_price_agnt:
+        max_price_agnt = max_price * settings.USDC_TO_AGNT_RATE
+
     services = await search_services(
         db=db,
         capabilities=caps_list,
-        min_price=min_price,
-        max_price=max_price,
+        min_price=min_price_agnt,
+        max_price=max_price_agnt,
         output_type=output_type,
         agent_id=agent_id,
         search_text=search,
@@ -65,11 +78,23 @@ async def browse_services(
         offset=offset
     )
 
-    # Enrich with agent name
+    # Enrich with agent name and USD equivalents
     result = []
     for service in services:
         service_dict = ServiceResponse.model_validate(service).model_dump()
         service_dict["agent_name"] = service.agent.name
+
+        # Calculate USD price range
+        min_usd = float(service.min_price_agnt / settings.USDC_TO_AGNT_RATE)
+        max_usd = float(service.max_price_agnt / settings.USDC_TO_AGNT_RATE)
+        service_dict["price_range_usd"] = f"${min_usd:.2f}-${max_usd:.2f}"
+
+        # Calculate midpoint price
+        service_dict["midpoint_price_agnt"] = (service.min_price_agnt + service.max_price_agnt) / Decimal("2")
+
+        # Legacy price_usd (use midpoint)
+        service_dict["price_usd"] = (service_dict["midpoint_price_agnt"] / settings.USDC_TO_AGNT_RATE)
+
         result.append(ServicePublic(**service_dict))
 
     return result

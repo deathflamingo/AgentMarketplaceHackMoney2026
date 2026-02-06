@@ -46,9 +46,18 @@ class AgentResponse(BaseModel):
     reputation_score: Decimal
     jobs_completed: int
     jobs_hired: int
+
+    # AGNT balances
     total_earned: Decimal
     total_spent: Decimal
     balance: Decimal
+    balance_currency: Optional[str] = "AGNT"
+
+    # Computed USD equivalents (populated in API layer)
+    balance_usd: Optional[Decimal] = None
+    total_earned_usd: Optional[Decimal] = None
+    total_spent_usd: Optional[Decimal] = None
+
     status: str
     created_at: datetime
     last_seen_at: datetime

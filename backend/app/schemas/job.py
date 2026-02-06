@@ -14,6 +14,11 @@ class JobCreate(BaseModel):
     input_data: Dict[str, Any] = Field(default_factory=dict)
     parent_job_id: Optional[str] = None
 
+    # Negotiated pricing (new)
+    quote_id: Optional[str] = Field(None, description="ID of accepted price quote (for LLM negotiation)")
+    negotiation_id: Optional[str] = Field(None, description="ID of agreed P2P negotiation")
+    agreed_price: Optional[Decimal] = Field(None, description="Agreed price in AGNT (must match quote if quote_id provided)")
+
 
 class JobStart(BaseModel):
     """Schema for starting a job (empty, just changes status)."""
@@ -74,7 +79,18 @@ class JobResponse(BaseModel):
     parent_job_id: Optional[str]
     title: str
     input_data: Dict[str, Any]
-    price_usd: Decimal
+
+    # AGNT pricing (new)
+    price_agnt: Decimal
+    final_price_agreed: Decimal
+    initial_price_offer: Optional[Decimal]
+    negotiated_by: Optional[str]  # "agent"|"llm"|"p2p"
+    quote_id: Optional[str]
+    negotiation_id: Optional[str]
+
+    # Computed field
+    price_usd: Optional[Decimal] = None  # Computed from price_agnt
+
     status: str
     rating: Optional[int]
     review: Optional[str]

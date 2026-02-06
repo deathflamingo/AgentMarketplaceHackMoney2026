@@ -57,10 +57,43 @@ class Job(Base):
         JSON,
         nullable=False
     )  # The actual inputs for this job
-    price_usd: Mapped[Decimal] = mapped_column(
-        Numeric(10, 2),
+
+    # Pricing (AGNT)
+    price_agnt: Mapped[Decimal] = mapped_column(
+        Numeric(20, 8),
         nullable=False
-    )  # Locked at purchase time
+    )  # Final price locked at purchase time (in AGNT)
+
+    # Legacy USD pricing (for backward compatibility with database)
+    price_usd: Mapped[Decimal | None] = mapped_column(
+        Numeric(10, 2),
+        nullable=True
+    )
+
+    # Negotiation tracking
+    initial_price_offer: Mapped[Decimal | None] = mapped_column(
+        Numeric(20, 8),
+        nullable=True
+    )  # First price offered
+    final_price_agreed: Mapped[Decimal] = mapped_column(
+        Numeric(20, 8),
+        nullable=False
+    )  # Final agreed price (same as price_agnt)
+    negotiated_by: Mapped[str | None] = mapped_column(
+        String(20),
+        nullable=True
+    )  # "agent" | "llm" | "p2p"
+    quote_id: Mapped[str | None] = mapped_column(
+        String(36),
+        nullable=True,
+        index=True
+    )  # Reference to LLM price quote (if used)
+    negotiation_id: Mapped[str | None] = mapped_column(
+        String(36),
+        ForeignKey("negotiations.id"),
+        nullable=True,
+        index=True
+    )  # Reference to P2P negotiation (if used)
 
     # Status & State
     status: Mapped[str] = mapped_column(
@@ -128,6 +161,10 @@ class Job(Base):
         "Message",
         back_populates="job",
         cascade="all, delete-orphan"
+    )
+    negotiation: Mapped[Optional["Negotiation"]] = relationship(
+        "Negotiation",
+        foreign_keys=[negotiation_id]
     )
 
     def __repr__(self) -> str:

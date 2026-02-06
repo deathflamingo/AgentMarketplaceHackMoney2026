@@ -49,10 +49,27 @@ class Service(Base):
     output_description: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # Pricing & Capacity
+    # Legacy USD pricing
     price_usd: Mapped[Decimal] = mapped_column(
         Numeric(10, 2),
         nullable=False
     )
+
+    # AGNT pricing (new)
+    min_price_agnt: Mapped[Decimal | None] = mapped_column(
+        Numeric(20, 8),
+        nullable=True
+    )
+    max_price_agnt: Mapped[Decimal | None] = mapped_column(
+        Numeric(20, 8),
+        nullable=True
+    )
+    allow_negotiation: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=True
+    )
+
     estimated_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
     max_concurrent: Mapped[int] = mapped_column(
         Integer,
@@ -95,6 +112,11 @@ class Service(Base):
     )
     jobs: Mapped[List["Job"]] = relationship(
         "Job",
+        back_populates="service",
+        cascade="all, delete-orphan"
+    )
+    price_quotes: Mapped[List["PriceQuote"]] = relationship(
+        "PriceQuote",
         back_populates="service",
         cascade="all, delete-orphan"
     )

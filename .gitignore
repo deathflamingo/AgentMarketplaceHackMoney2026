@@ -1,2 +1,6 @@
 docker-compose.yml
 /demo/*
+*.md
+!README.md
+/scripts/*
+/contracts/*

@@ -163,30 +163,37 @@ cmd_register() {
 cmd_create_service() {
     log_info "Creating service..."
 
-    if [ -z "$ARG_name" ] || [ -z "$ARG_price" ] || [ -z "$ARG_capabilities" ]; then
-        log_error "Missing required parameters: --name, --price, --capabilities"
-        echo "Usage: create-service --name 'Service Name' --price 10.00 --capabilities 'cap1,cap2'"
+    if [ -z "$ARG_name" ] || [ -z "$ARG_min_price" ] || [ -z "$ARG_max_price" ]; then
+        log_error "Missing required parameters: --name, --min-price, --max-price"
+        echo "Usage: create-service --name 'Service Name' --min-price 5.00 --max-price 15.00"
         echo "  [--description 'desc'] [--output-type 'text|code|json|file|image_url']"
-        echo "  [--output-description 'desc'] [--estimated-minutes 30]"
+        echo "  [--output-description 'desc'] [--estimated-minutes 30] [--allow-negotiation true]"
         return 1
     fi
+
+    # Convert USD to AGNT (multiply by 10000)
+    local min_price_agnt=$(echo "$ARG_min_price * 10000" | bc | cut -d. -f1)
+    local max_price_agnt=$(echo "$ARG_max_price * 10000" | bc | cut -d. -f1)
 
     local data=$(jq -n \
         --arg name "$ARG_name" \
         --arg desc "${ARG_description:-Service description}" \
-        --arg price "$ARG_price" \
+        --arg min_price "$min_price_agnt" \
+        --arg max_price "$max_price_agnt" \
         --arg output_type "${ARG_output_type:-text}" \
         --arg output_desc "${ARG_output_description:-Service output}" \
-        --arg caps "$ARG_capabilities" \
+        --arg allow_neg "${ARG_allow_negotiation:-true}" \
         --arg mins "${ARG_estimated_minutes:-30}" \
         '{
             name: $name,
             description: $desc,
-            price_usd: ($price | tonumber),
+            min_price_agnt: ($min_price | tonumber),
+            max_price_agnt: ($max_price | tonumber),
+            allow_negotiation: ($allow_neg | test("true")),
             output_type: $output_type,
             output_description: $output_desc,
             required_inputs: [],
-            capabilities_required: ($caps | split(",")),
+            capabilities_required: [],
             estimated_minutes: ($mins | tonumber)
         }')
 
@@ -501,6 +508,225 @@ cmd_verify_payment() {
     fi
 }
 
+# P2P Negotiation Commands
+
+cmd_start_negotiation() {
+    if [ -z "$ARG_service_id" ] || [ -z "$ARG_offer" ]; then
+        log_error "Missing required parameters: --service-id, --offer"
+        echo "Usage: start-negotiation --service-id SERVICE_ID --offer PRICE_USD [--max-price MAX_USD] [--message 'msg'] [--description 'job description']"
+        return 1
+    fi
+
+    log_info "Starting P2P negotiation..."
+
+    # Convert USD to AGNT (multiply by 10000)
+    local offer=$(echo "$ARG_offer * 10000" | bc | cut -d. -f1)
+    local max_price="${ARG_max_price:-}"
+    if [ -n "$max_price" ]; then
+        max_price=$(echo "$max_price * 10000" | bc | cut -d. -f1)
+    fi
+
+    local description="${ARG_description:-Need this service}"
+    local message="${ARG_message:-}"
+
+    local data=$(jq -n \
+        --arg service_id "$ARG_service_id" \
+        --arg description "$description" \
+        --arg offer "$offer" \
+        --arg max_price "$max_price" \
+        --arg message "$message" \
+        '{
+            service_id: $service_id,
+            job_description: $description,
+            initial_offer: ($offer | tonumber),
+            max_price: (if $max_price != "" then ($max_price | tonumber) else null end),
+            message: (if $message != "" then $message else null end)
+        }')
+
+    local response=$(api_request POST "/negotiations/start" "$data")
+    if [ $? -eq 0 ]; then
+        log_success "Negotiation started!"
+        echo ""
+        echo "$response" | jq '{
+            id,
+            status,
+            current_price,
+            current_price_usd,
+            waiting_for,
+            round_count
+        }'
+        echo ""
+        local neg_id=$(echo "$response" | jq -r '.id')
+        echo -e "${BLUE}Negotiation ID: $neg_id${NC}"
+        echo -e "${YELLOW}Track with: $0 negotiation-details --id $neg_id${NC}"
+    fi
+}
+
+cmd_respond_bid() {
+    if [ -z "$ARG_id" ] || [ -z "$ARG_action" ]; then
+        log_error "Missing required parameters: --id, --action"
+        echo "Usage: respond-bid --id NEG_ID --action [accept|counter|reject] [--price PRICE_USD] [--message 'msg']"
+        return 1
+    fi
+
+    local action="$ARG_action"
+    local counter_price="${ARG_price:-}"
+    local message="${ARG_message:-}"
+
+    if [ "$action" = "counter" ] && [ -z "$counter_price" ]; then
+        log_error "Counter action requires --price"
+        return 1
+    fi
+
+    if [ -n "$counter_price" ]; then
+        counter_price=$(echo "$counter_price * 10000" | bc | cut -d. -f1)
+    fi
+
+    log_info "Responding to negotiation..."
+
+    local data=$(jq -n \
+        --arg action "$action" \
+        --arg price "$counter_price" \
+        --arg message "$message" \
+        '{
+            action: $action,
+            counter_price: (if $price != "" then ($price | tonumber) else null end),
+            message: (if $message != "" then $message else null end)
+        }')
+
+    local response=$(api_request POST "/negotiations/$ARG_id/respond" "$data")
+    if [ $? -eq 0 ]; then
+        local status=$(echo "$response" | jq -r '.status')
+
+        if [ "$status" = "agreed" ]; then
+            log_success "🎉 Negotiation AGREED!"
+            echo ""
+            echo "$response" | jq '{
+                id,
+                status,
+                current_price,
+                current_price_usd,
+                agreed_at
+            }'
+            echo ""
+            echo -e "${GREEN}You can now create a job with this negotiation:${NC}"
+            echo -e "${BLUE}$0 create-job --negotiation-id $ARG_id${NC}"
+        else
+            log_success "Response sent!"
+            echo ""
+            echo "$response" | jq '{
+                id,
+                status,
+                current_price,
+                current_price_usd,
+                waiting_for,
+                round_count
+            }'
+        fi
+    fi
+}
+
+cmd_create_job() {
+    if [ -z "$ARG_negotiation_id" ]; then
+        log_error "Missing required parameter: --negotiation-id"
+        echo "Usage: create-job --negotiation-id NEG_ID [--input 'json']"
+        return 1
+    fi
+
+    log_info "Creating job from negotiation..."
+
+    local input_data="${ARG_input:-{}}"
+
+    # Get negotiation details first
+    local neg_response=$(api_request GET "/negotiations/$ARG_negotiation_id" "")
+    if [ $? -ne 0 ]; then
+        return 1
+    fi
+
+    local service_id=$(echo "$neg_response" | jq -r '.service_id')
+
+    # Construct JSON safely by parsing input_data first
+    local data=$(echo "$input_data" | jq \
+        --arg service_id "$service_id" \
+        --arg neg_id "$ARG_negotiation_id" \
+        '{
+            service_id: $service_id,
+            negotiation_id: $neg_id,
+            input_data: .
+        }')
+
+    local api_key=$(get_api_key)
+    local curl_opts=(-s -w "\n%{http_code}")
+    curl_opts+=(-H "X-Agent-Key: $api_key")
+    curl_opts+=(-H "Content-Type: application/json")
+    curl_opts+=(-H "x-payment-method: balance")
+    curl_opts+=(-X POST)
+    curl_opts+=(-d "$data")
+
+    local response=$(curl "${curl_opts[@]}" "${API_URL}/jobs")
+    local http_code=$(echo "$response" | tail -n1)
+    local body=$(echo "$response" | sed '$d')
+
+    if [ "$http_code" -ge 200 ] && [ "$http_code" -lt 300 ]; then
+        log_success "Job created!"
+        echo ""
+        echo "$body" | jq '{
+            id,
+            price_agnt,
+            price_usd,
+            negotiated_by,
+            status
+        }'
+        echo ""
+        local job_id=$(echo "$body" | jq -r '.id')
+        echo -e "${BLUE}Job ID: $job_id${NC}"
+    else
+        log_error "Failed to create job (HTTP $http_code)"
+        echo "$body" | jq '.'
+        return 1
+    fi
+}
+
+cmd_negotiations() {
+    log_info "Fetching your negotiations..."
+
+    local status_filter="${ARG_status:-}"
+    local endpoint="/negotiations"
+    if [ -n "$status_filter" ]; then
+        endpoint="/negotiations?status=$status_filter"
+    fi
+
+    local response=$(api_request GET "$endpoint" "")
+    if [ $? -eq 0 ]; then
+        echo ""
+        echo "$response" | jq '.[] | {
+            id,
+            status,
+            current_price,
+            current_price_usd,
+            waiting_for,
+            round_count,
+            created_at
+        }'
+    fi
+}
+
+cmd_negotiation_details() {
+    if [ -z "$ARG_id" ]; then
+        log_error "Missing required parameter: --id"
+        echo "Usage: negotiation-details --id NEG_ID"
+        return 1
+    fi
+
+    log_info "Fetching negotiation details..."
+
+    local response=$(api_request GET "/negotiations/$ARG_id" "")
+    if [ $? -eq 0 ]; then
+        echo ""
+        echo "$response" | jq '.'
+    fi
+}
+
 # Main command dispatcher
 main() {
     if [ $# -eq 0 ]; then
@@ -524,6 +750,13 @@ main() {
         echo "  inbox              - Check your messages"
         echo "  profile            - View your agent profile"
         echo "  stats              - View platform statistics"
+        echo ""
+        echo "P2P Negotiation Commands:"
+        echo "  start-negotiation  - Start price negotiation with a worker"
+        echo "  respond-bid        - Respond to a negotiation (accept/counter/reject)"
+        echo "  create-job         - Create job from agreed negotiation"
+        echo "  negotiations       - List all your negotiations"
+        echo "  negotiation-details- View negotiation details"
         exit 1
     fi
 
@@ -582,6 +815,21 @@ main() {
             ;;
         stats)
             cmd_stats
+            ;;
+        start-negotiation)
+            cmd_start_negotiation
+            ;;
+        respond-bid)
+            cmd_respond_bid
+            ;;
+        create-job)
+            cmd_create_job
+            ;;
+        negotiations)
+            cmd_negotiations
+            ;;
+        negotiation-details)
+            cmd_negotiation_details
             ;;
         *)
             log_error "Unknown command: $command"
