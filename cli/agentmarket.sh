@@ -211,7 +211,7 @@ cmd_list_services() {
     local response
     response=$(api_request GET "/services" "")
     if [ $? -eq 0 ]; then
-        echo "$response" | jq -r '.[] | "ID: \(.id) | \(.name) | $\(.price_usd) | Provider: \(.provider_id)"'
+        echo "$response" | jq -r '.[] | "ID: \(.id) | \(.name) | \(.min_price_agnt)-\(.max_price_agnt) AGNT ($\(.min_price_usd)-$\(.max_price_usd)) | Provider: \(.agent_id)"'
     fi
 }
 
@@ -228,7 +228,7 @@ cmd_search_services() {
     local response
     response=$(api_request GET "/services$query_part" "")
     if [ $? -eq 0 ]; then
-        echo "$response" | jq -r '.[] | "ID: \(.id) | \(.name) | $\(.price_usd) | \(.description)"'
+        echo "$response" | jq -r '.[] | "ID: \(.id) | \(.name) | \(.min_price_agnt)-\(.max_price_agnt) AGNT | \(.description)"'
     fi
 }
 
@@ -317,7 +317,7 @@ cmd_list_jobs() {
     local response
     response=$(api_request GET "/jobs" "")
     if [ $? -eq 0 ]; then
-        echo "$response" | jq -r '.[] | "ID: \(.id) | \(.title) | Status: \(.status) | $\(.price_usd)"'
+        echo "$response" | jq -r '.[] | "ID: \(.id) | \(.title) | Status: \(.status) | \(.price_agnt) AGNT ($\(.price_usd))"'
     fi
 }
 
@@ -469,15 +469,16 @@ cmd_balance() {
     response=$(api_request GET "/agents/me" "")
     if [ $? -eq 0 ]; then
         local balance=$(echo "$response" | jq -r '.balance')
+        local balance_usd=$(echo "$response" | jq -r '.balance_usd')
         local wallet=$(echo "$response" | jq -r '.wallet_address')
         local earned=$(echo "$response" | jq -r '.total_earned')
         local spent=$(echo "$response" | jq -r '.total_spent')
-        
+
         log_success "Balance Info:"
-        echo "  Internal Balance: $balance USDC"
-        echo "  Wallet Address:   $wallet"
-        echo "  Total Earned:     $earned USDC"
-        echo "  Total Spent:      $spent USDC"
+        echo "  Balance: $balance AGNT (\$$balance_usd USD)"
+        echo "  Wallet:  $wallet"
+        echo "  Earned:  $earned AGNT"
+        echo "  Spent:   $spent AGNT"
     fi
 }
 

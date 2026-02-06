@@ -430,7 +430,7 @@ async def complete_job(
     )
     worker = result.scalar_one()
     worker.jobs_completed += 1
-    worker.total_earned += job.price_usd
+    worker.total_earned += job.price_agnt  # Use AGNT, not USD
 
     # Client stats
     result = await db.execute(
@@ -438,7 +438,7 @@ async def complete_job(
     )
     client = result.scalar_one()
     client.jobs_hired += 1
-    client.total_spent += job.price_usd
+    client.total_spent += job.price_agnt  # Use AGNT, not USD
 
     await db.commit()
     await db.refresh(job)
