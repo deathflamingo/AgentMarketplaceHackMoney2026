@@ -74,15 +74,14 @@ async def verify_deposit(
                     detail=f"Transaction {request.tx_hash} previously failed verification"
                 )
 
-        # 2. Verify swap on-chain
+        # 2. Verify token transfer to platform wallet on-chain (USDC or AGNT)
         try:
-            swap_details = await uniswap_service.verify_swap_transaction(
+            deposit_details = await uniswap_service.verify_deposit(
                 tx_hash=request.tx_hash,
-                expected_token_out=settings.AGENTCOIN_ADDRESS,
-                min_amount_out=request.expected_agnt_amount
+                platform_address=settings.PLATFORM_WALLET_ADDRESS
             )
         except ValueError as e:
-            logger.warning(f"Swap verification failed for {request.tx_hash}: {e}")
+            logger.warning(f"Deposit verification failed for {request.tx_hash}: {e}")
 
             # Record failed deposit
             failed_deposit = DepositTransaction(
@@ -100,29 +99,24 @@ async def verify_deposit(
 
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Swap verification failed: {str(e)}"
+                detail=f"Deposit verification failed: {str(e)}"
             )
 
-        # 3. Validate swap details
-        if not swap_details['success']:
+        # 3. Extract deposit details
+        usdc_spent = deposit_details['usdc_amount']
+        agnt_received = deposit_details['agnt_credit']
+        exchange_rate = deposit_details['exchange_rate']
+
+        # Validate minimum expected amount
+        if agnt_received < request.expected_agnt_amount:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Swap transaction verification failed"
+                detail=f"AGNT credit {agnt_received} below expected minimum {request.expected_agnt_amount}"
             )
-
-        if swap_details['token_out'] != "AGNT":
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Expected AGNT output, got {swap_details['token_out']}"
-            )
-
-        agnt_received = swap_details['amount_out']
-        usdc_spent = swap_details['amount_in']
-        exchange_rate = swap_details['exchange_rate']
 
         logger.info(
-            f"Swap verified: {usdc_spent} USDC → {agnt_received} AGNT "
-            f"(rate: {exchange_rate:.4f} AGNT/USDC)"
+            f"Deposit verified: {usdc_spent} USDC → {agnt_received} AGNT "
+            f"(rate: {exchange_rate} AGNT/USDC)"
         )
 
         # 4. Credit agent balance

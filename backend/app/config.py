@@ -56,6 +56,9 @@ class Settings(BaseSettings):
     QUOTE_EXPIRATION_SECONDS: int = 3600  # Quotes valid for 1 hour
     ENABLE_PRICE_NEGOTIATION: bool = True  # Feature flag for negotiation
 
+    # Deployment (used by scripts, not the app itself)
+    DEPLOYER_PRIVATE_KEY: str = ""
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",

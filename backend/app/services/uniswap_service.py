@@ -129,6 +129,100 @@ class UniswapV4Service:
             logger.error(f"Error getting AGNT→USDC quote: {e}", exc_info=True)
             raise
 
+    async def verify_deposit(
+        self,
+        tx_hash: str,
+        platform_address: str
+    ) -> Dict:
+        """
+        Verify a token deposit to the platform wallet.
+
+        Accepts either:
+        - USDC transfer: credited at fixed rate (1 USDC = 10,000 AGNT)
+        - AGNT transfer: credited 1:1
+
+        Args:
+            tx_hash: Transaction hash to verify
+            platform_address: Platform wallet address that should receive tokens
+
+        Returns:
+            Dictionary with deposit details:
+            {
+                'success': bool,
+                'usdc_amount': Decimal,
+                'agnt_credit': Decimal,
+                'sender': str,
+                'exchange_rate': Decimal
+            }
+
+        Raises:
+            ValueError: If transaction invalid or no recognized transfer found
+        """
+        try:
+            logger.info(f"Verifying deposit: tx_hash={tx_hash}")
+
+            # Get transaction receipt
+            receipt = self.web3.eth.get_transaction_receipt(tx_hash)
+
+            if not receipt:
+                raise ValueError(f"Transaction not found: {tx_hash}")
+
+            if receipt['status'] != 1:
+                raise ValueError(f"Transaction failed on-chain: {tx_hash}")
+
+            # Parse Transfer events
+            transfers = self._parse_transfer_events(receipt)
+
+            if not transfers:
+                raise ValueError(f"No token transfers found in transaction {tx_hash}")
+
+            # Find a USDC or AGNT transfer TO the platform wallet
+            deposit_transfer = None
+            for transfer in transfers:
+                if (transfer['to'].lower() == platform_address.lower() and
+                        transfer['symbol'] in ('USDC', 'AGNT')):
+                    deposit_transfer = transfer
+                    break
+
+            if not deposit_transfer:
+                raise ValueError(
+                    f"No USDC or AGNT transfer to platform wallet ({platform_address}) "
+                    f"found in transaction {tx_hash}"
+                )
+
+            if deposit_transfer['symbol'] == 'USDC':
+                usdc_amount = deposit_transfer['amount']
+                exchange_rate = settings.USDC_TO_AGNT_RATE
+                agnt_credit = usdc_amount * exchange_rate
+            else:
+                # Direct AGNT transfer — credit 1:1
+                agnt_credit = deposit_transfer['amount']
+                exchange_rate = Decimal("1")
+                usdc_amount = agnt_credit / settings.USDC_TO_AGNT_RATE
+
+            logger.info(
+                f"Deposit verified ({deposit_transfer['symbol']}): "
+                f"{deposit_transfer['amount']} {deposit_transfer['symbol']} → {agnt_credit} AGNT "
+                f"(rate: {exchange_rate})"
+            )
+
+            return {
+                'success': True,
+                'usdc_amount': usdc_amount,
+                'agnt_credit': agnt_credit,
+                'sender': deposit_transfer['from'],
+                'exchange_rate': exchange_rate
+            }
+
+        except TransactionNotFound:
+            logger.error(f"Transaction not found: {tx_hash}")
+            raise ValueError(f"Transaction not found: {tx_hash}")
+        except ValueError:
+            raise
+        except Exception as e:
+            logger.error(f"Error verifying deposit {tx_hash}: {e}", exc_info=True)
+            raise
+
     async def verify_swap_transaction(
         self,
         tx_hash: str,

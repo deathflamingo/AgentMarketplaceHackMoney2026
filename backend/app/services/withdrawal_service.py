@@ -210,7 +210,10 @@ class WithdrawalService:
         db: AsyncSession
     ) -> bool:
         """
-        Execute the withdrawal: swap AGNT → USDC and transfer to recipient.
+        Execute the withdrawal: convert AGNT to USDC at fixed rate and transfer.
+
+        Sends USDC from platform wallet to the recipient address.
+        Refunds AGNT to agent balance on failure.
 
         Args:
             withdrawal: Withdrawal transaction to execute
@@ -218,11 +221,6 @@ class WithdrawalService:
 
         Returns:
             True if successful, False otherwise
-
-        Note: This is a placeholder implementation. In production:
-        1. Execute Uniswap V4 swap from platform wallet
-        2. Transfer USDC to recipient
-        3. Update withdrawal record with transaction hashes
         """
         try:
             if not self.platform_account:
@@ -237,54 +235,56 @@ class WithdrawalService:
 
             logger.info(f"Executing withdrawal {withdrawal.id}...")
 
-            # Calculate actual AGNT to swap (after fee)
-            agnt_to_swap = withdrawal.agnt_amount_in - withdrawal.fee_agnt
-
-            # TODO: Execute Uniswap V4 swap
-            # 1. Approve AGNT to Uniswap V4 PoolManager/SwapRouter
-            # 2. Execute swap: AGNT → USDC
-            # 3. Get actual USDC received from swap
-
-            # For now, use estimated values
-            # In production, replace with actual swap execution
-            usdc_received = await uniswap_service.get_quote_agnt_to_usdc(agnt_to_swap)
-            exchange_rate = usdc_received / agnt_to_swap if agnt_to_swap > 0 else Decimal("0")
-
-            # Placeholder transaction hashes
-            swap_tx_hash = "0x" + "0" * 64  # Replace with actual swap tx
+            # Calculate USDC amount at fixed rate (no Uniswap swap needed)
+            agnt_after_fee = withdrawal.agnt_amount_in - withdrawal.fee_agnt
+            usdc_amount = agnt_after_fee / settings.USDC_TO_AGNT_RATE
+            exchange_rate = Decimal("1") / settings.USDC_TO_AGNT_RATE
 
             logger.info(
-                f"Swap executed (placeholder): {agnt_to_swap} AGNT → {usdc_received} USDC"
+                f"Withdrawal conversion: {agnt_after_fee} AGNT → {usdc_amount} USDC "
+                f"(rate: 1 USDC = {settings.USDC_TO_AGNT_RATE} AGNT)"
             )
 
-            # TODO: Transfer USDC to recipient
-            # usdc_contract = self.web3.eth.contract(
-            #     address=self.usdc_address,
-            #     abi=self.erc20_abi
-            # )
-            # transfer_tx = usdc_contract.functions.transfer(
-            #     withdrawal.recipient_address,
-            #     int(usdc_received * Decimal(10 ** 6))  # USDC has 6 decimals
-            # ).build_transaction({
-            #     'from': self.platform_address,
-            #     'nonce': self.web3.eth.get_transaction_count(self.platform_address),
-            #     'gas': 100000,
-            #     'gasPrice': self.web3.eth.gas_price
-            # })
-            # signed_transfer = self.platform_account.sign_transaction(transfer_tx)
-            # transfer_tx_hash = self.web3.eth.send_raw_transaction(signed_transfer.rawTransaction)
-            # transfer_receipt = self.web3.eth.wait_for_transaction_receipt(transfer_tx_hash)
+            # Transfer USDC from platform wallet to recipient
+            usdc_contract = self.web3.eth.contract(
+                address=self.web3.to_checksum_address(self.usdc_address),
+                abi=self.erc20_abi
+            )
 
-            transfer_tx_hash = "0x" + "0" * 64  # Replace with actual transfer tx
+            # USDC has 6 decimals
+            usdc_raw_amount = int(usdc_amount * Decimal(10 ** 6))
+
+            recipient = self.web3.to_checksum_address(withdrawal.recipient_address)
+            nonce = self.web3.eth.get_transaction_count(self.platform_address)
+
+            transfer_tx = usdc_contract.functions.transfer(
+                recipient,
+                usdc_raw_amount
+            ).build_transaction({
+                'from': self.platform_address,
+                'nonce': nonce,
+                'gas': 100000,
+                'gasPrice': self.web3.eth.gas_price,
+                'chainId': 84532  # Base Sepolia
+            })
+
+            signed_transfer = self.platform_account.sign_transaction(transfer_tx)
+            tx_hash = self.web3.eth.send_raw_transaction(signed_transfer.raw_transaction)
+            transfer_receipt = self.web3.eth.wait_for_transaction_receipt(tx_hash, timeout=120)
+
+            if transfer_receipt['status'] != 1:
+                raise Exception(f"USDC transfer failed on-chain: {tx_hash.hex()}")
+
+            transfer_tx_hash = tx_hash.hex()
 
             logger.info(
-                f"USDC transfer executed (placeholder): {usdc_received} USDC to {withdrawal.recipient_address}"
+                f"USDC transfer executed: {usdc_amount} USDC to {withdrawal.recipient_address} "
+                f"(tx: {transfer_tx_hash})"
             )
 
             # Update withdrawal record
-            withdrawal.usdc_amount_out = usdc_received
+            withdrawal.usdc_amount_out = usdc_amount
             withdrawal.exchange_rate = exchange_rate
-            withdrawal.swap_tx_hash = swap_tx_hash
             withdrawal.transfer_tx_hash = transfer_tx_hash
             withdrawal.status = "completed"
             withdrawal.completed_at = datetime.utcnow()

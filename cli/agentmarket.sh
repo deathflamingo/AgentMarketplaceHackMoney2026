@@ -482,6 +482,108 @@ cmd_balance() {
     fi
 }
 
+cmd_deposit() {
+    if [ -z "$ARG_tx_hash" ]; then
+        # No tx_hash provided — show deposit instructions
+        log_info "Deposit USDC to fund your AGNT balance"
+        echo ""
+        echo "  Platform Wallet: 0x1B37EB42e8C6cE71869a5c866Cf72e0e47Fa55b6"
+        echo "  Network:         Base Sepolia (Chain ID: 84532)"
+        echo "  Token:           USDC (0x036CbD53842c5426634e7929541eC2318f3dCF7e)"
+        echo "  Rate:            1 USDC = 10,000 AGNT"
+        echo ""
+        echo "After sending USDC, verify your deposit:"
+        echo ""
+        echo -e "${GREEN}  $0 deposit --tx-hash '0xYourTransactionHash' --amount 10${NC}"
+        echo ""
+        echo "  --amount is the expected AGNT credit (USDC * 10000)"
+        return 0
+    fi
+
+    local expected_agnt="${ARG_amount:-0}"
+    if [ "$expected_agnt" = "0" ]; then
+        log_error "Missing --amount (expected AGNT amount, e.g. 10000 for 1 USDC)"
+        return 1
+    fi
+
+    log_info "Verifying USDC deposit on-chain..."
+
+    local data=$(jq -n \
+        --arg tx_hash "$ARG_tx_hash" \
+        --arg amount "$expected_agnt" \
+        '{
+            tx_hash: $tx_hash,
+            expected_agnt_amount: ($amount | tonumber)
+        }')
+
+    local response
+    response=$(api_request POST "/deposits/verify" "$data")
+    if [ $? -eq 0 ]; then
+        log_success "Deposit verified!"
+        local agnt=$(echo "$response" | jq -r '.deposit.agnt_amount_out')
+        local usdc=$(echo "$response" | jq -r '.deposit.usdc_amount_in')
+        local new_balance=$(echo "$response" | jq -r '.agent_new_balance')
+        echo ""
+        echo "  Deposited:    $usdc USDC"
+        echo "  Credited:     $agnt AGNT"
+        echo "  New Balance:  $new_balance AGNT"
+    fi
+}
+
+cmd_withdraw() {
+    if [ -z "$ARG_amount" ] || [ -z "$ARG_to" ]; then
+        log_error "Missing required parameters: --amount, --to"
+        echo "Usage: withdraw --amount AGNT_AMOUNT --to RECIPIENT_ADDRESS"
+        echo ""
+        echo "  --amount   AGNT amount to withdraw (min 1,000 AGNT)"
+        echo "  --to       Wallet address to receive USDC"
+        echo ""
+        echo "  Rate:  10,000 AGNT = 1 USDC"
+        echo "  Fee:   0.5%"
+        echo ""
+        echo "Example: withdraw --amount 100000 --to 0xYourWalletAddress"
+        return 1
+    fi
+
+    log_info "Requesting withdrawal..."
+
+    local data=$(jq -n \
+        --arg amount "$ARG_amount" \
+        --arg recipient "$ARG_to" \
+        '{
+            agnt_amount: ($amount | tonumber),
+            recipient_address: $recipient
+        }')
+
+    local response
+    response=$(api_request POST "/withdrawals/request" "$data")
+    if [ $? -eq 0 ]; then
+        local w_status=$(echo "$response" | jq -r '.withdrawal.status')
+        local agnt=$(echo "$response" | jq -r '.withdrawal.agnt_amount_in')
+        local usdc=$(echo "$response" | jq -r '.withdrawal.usdc_amount_out')
+        local fee=$(echo "$response" | jq -r '.fee_agnt')
+        local new_balance=$(echo "$response" | jq -r '.agent_new_balance')
+        local tx_hash=$(echo "$response" | jq -r '.withdrawal.transfer_tx_hash // "none"')
+
+        if [ "$w_status" = "completed" ]; then
+            log_success "Withdrawal completed!"
+        else
+            log_error "Withdrawal failed: $(echo "$response" | jq -r '.message')"
+        fi
+        echo ""
+        echo "  Withdrew:     $agnt AGNT"
+        echo "  Fee:          $fee AGNT"
+        echo "  USDC sent:    $usdc USDC"
+        echo "  Recipient:    $ARG_to"
+        echo "  Status:       $w_status"
+        if [ "$tx_hash" != "none" ] && [ "$tx_hash" != "null" ]; then
+            echo "  Tx Hash:      $tx_hash"
+            echo "  BaseScan:     https://sepolia.basescan.org/tx/$tx_hash"
+        fi
+        echo "  New Balance:  $new_balance AGNT"
+    fi
+}
+
 cmd_verify_payment() {
     if [ -z "$ARG_tx_hash" ] || [ -z "$ARG_amount" ]; then
         log_error "Missing required parameters: --tx-hash, --amount"
@@ -738,6 +840,8 @@ main() {
         echo "  register           - Register as a new agent"
         echo "  search-agents      - Search agents (use --q 'query')"
         echo "  balance            - Check your balance and stats"
+        echo "  deposit            - Deposit USDC to get AGNT (use --tx-hash, --amount)"
+        echo "  withdraw           - Withdraw AGNT to USDC (use --amount, --to)"
         echo "  verify-payment     - Verify an on-chain payment (use --tx-hash, --amount)"
         echo "  create-service     - Create a service you can provide"
         echo "  list-services      - List available services"
@@ -777,6 +881,12 @@ main() {
             ;;
         balance)
             cmd_balance
+            ;;
+        deposit)
+            cmd_deposit
+            ;;
+        withdraw)
+            cmd_withdraw
             ;;
         verify-payment)
             cmd_verify_payment

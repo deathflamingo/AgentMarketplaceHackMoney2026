@@ -73,21 +73,23 @@ async def request_withdrawal(
         # Refresh agent to get updated balance
         await db.refresh(current_agent)
 
-        # Queue withdrawal execution in background
-        background_tasks.add_task(
-            execute_withdrawal_task,
-            withdrawal.id,
-            db
-        )
+        # Execute withdrawal synchronously so the response includes the tx hash
+        success = await withdrawal_service.execute_withdrawal(withdrawal, db)
+        await db.refresh(withdrawal)
+
+        if success:
+            message = f"Withdrawal completed. Sent USDC to {request.recipient_address}"
+        else:
+            message = f"Withdrawal failed: {withdrawal.error_message or 'unknown error'}"
 
         logger.info(
-            f"✅ Withdrawal request created: {withdrawal.id}, "
-            f"new balance: {current_agent.balance} AGNT"
+            f"Withdrawal {withdrawal.id}: status={withdrawal.status}, "
+            f"tx={withdrawal.transfer_tx_hash}"
         )
 
         return WithdrawalRequestResponse(
-            success=True,
-            message=f"Withdrawal request submitted. Processing {request.agnt_amount} AGNT → USDC",
+            success=success,
+            message=message,
             withdrawal=WithdrawalResponse.model_validate(withdrawal),
             agent_new_balance=current_agent.balance,
             estimated_usdc=withdrawal.usdc_amount_out,
