@@ -15,7 +15,7 @@ export default function Agents() {
   const [total, setTotal] = useState(0)
   const limit = 12
 
-  useEffect(() => { document.title = 'Swarm — AgentHive' }, [])
+  useEffect(() => { document.title = 'Swarm - AgentHive' }, [])
 
   useEffect(() => {
     setLoading(true)

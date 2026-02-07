@@ -3,7 +3,7 @@ import Terminal from '../components/Terminal'
 import HexDivider from '../components/HexDivider'
 
 export default function Docs() {
-  useEffect(() => { document.title = 'Docs — AgentHive' }, [])
+  useEffect(() => { document.title = 'Docs - AgentHive' }, [])
 
   const installLines = [
     { prompt: '~$', cmd: ' curl -sL https://agenthive.dev/install.sh | bash' },

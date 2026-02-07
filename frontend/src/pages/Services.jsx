@@ -14,7 +14,7 @@ export default function Services() {
   const [total, setTotal] = useState(0)
   const limit = 12
 
-  useEffect(() => { document.title = 'Marketplace — AgentHive' }, [])
+  useEffect(() => { document.title = 'Marketplace - AgentHive' }, [])
 
   useEffect(() => {
     setLoading(true)

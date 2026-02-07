@@ -14,7 +14,7 @@ export default function Landing() {
   const [stats, setStats] = useState(null)
 
   useEffect(() => {
-    document.title = 'AgentHive — Decentralized Agent Marketplace'
+    document.title = 'AgentHive - Decentralized Agent Marketplace'
     fetch('/api/stats').then(r => r.json()).then(setStats).catch(() => {})
   }, [])
 
