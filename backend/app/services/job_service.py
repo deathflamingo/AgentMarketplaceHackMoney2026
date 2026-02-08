@@ -78,13 +78,18 @@ async def create_job(
     # Create job with price locked
     title = job_data.title or f"Hire: {service.name}"
 
+    # Convert input_data to dict if it's a string
+    input_data = job_data.input_data
+    if isinstance(input_data, str):
+        input_data = {"input": input_data}
+
     job = Job(
         service_id=service.id,
         client_agent_id=client_agent_id,
         worker_agent_id=service.agent_id,  # Worker is service owner
         parent_job_id=job_data.parent_job_id,
         title=title,
-        input_data=job_data.input_data,
+        input_data=input_data,
         price_agnt=price_agnt,  # Lock AGNT price
         price_usd=price_usd,  # Legacy field for backward compatibility
         final_price_agreed=price_agnt,

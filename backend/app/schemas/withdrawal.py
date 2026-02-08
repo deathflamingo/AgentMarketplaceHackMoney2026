@@ -15,9 +15,9 @@ class WithdrawalRequest(BaseModel):
     )
     recipient_address: str = Field(
         ...,
-        description="Wallet address to receive USDC",
-        min_length=42,
-        max_length=42
+        description="Wallet address or ENS name to receive USDC",
+        min_length=3,
+        max_length=255
     )
 
 

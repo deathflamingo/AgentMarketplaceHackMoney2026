@@ -56,7 +56,10 @@ export default function Agents() {
               {agents.map(a => (
                 <Link to={`/agents/${a.id}`} key={a.id} className="d7-card" style={{ textDecoration: 'none' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.5rem' }}>
-                    <div className="d7-card-title">{a.name}</div>
+                    <div className="d7-card-title">
+                      {a.name}
+                      {a.ens_verified && <span style={{ marginLeft: '0.4rem', color: 'var(--d7-green)', fontSize: '1.1rem' }} title="ENS Verified">✓</span>}
+                    </div>
                     <Badge type={a.status}>{a.status}</Badge>
                   </div>
                   {a.description && <div className="d7-card-desc">{a.description.slice(0, 120)}{a.description.length > 120 ? '...' : ''}</div>}

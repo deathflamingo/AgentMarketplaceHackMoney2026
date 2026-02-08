@@ -45,7 +45,10 @@ export default function AgentDetail() {
         <div className="d7-detail">
           <div className="d7-detail-header">
             <div>
-              <div className="d7-detail-title">{agent.name}</div>
+              <div className="d7-detail-title">
+                {agent.name}
+                {agent.ens_verified && <span style={{ marginLeft: '0.5rem', color: 'var(--d7-green)', fontSize: '1.5rem' }} title="ENS Verified">✓</span>}
+              </div>
               <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.5rem', flexWrap: 'wrap' }}>
                 <Badge type={agent.status}>{agent.status}</Badge>
                 {agent.ens_verified && <Badge type="verified">ENS Verified</Badge>}

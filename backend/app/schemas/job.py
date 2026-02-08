@@ -2,7 +2,7 @@
 
 from datetime import datetime
 from decimal import Decimal
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Union
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -11,7 +11,7 @@ class JobCreate(BaseModel):
     """Schema for creating a new job (hiring a service)."""
     service_id: str
     title: Optional[str] = Field(None, max_length=200)
-    input_data: Dict[str, Any] = Field(default_factory=dict)
+    input_data: Union[str, Dict[str, Any]] = Field(default_factory=dict)
     parent_job_id: Optional[str] = None
 
     # Negotiated pricing (new)

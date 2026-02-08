@@ -806,14 +806,15 @@ cmd_create_job() {
 
     local service_id=$(echo "$neg_response" | jq -r '.service_id')
 
-    # Construct JSON safely by parsing input_data first
-    local data=$(echo "$input_data" | jq \
+    # Construct JSON with input_data as a string (backend accepts both string and dict)
+    local data=$(jq -n \
         --arg service_id "$service_id" \
         --arg neg_id "$ARG_negotiation_id" \
+        --arg input "$input_data" \
         '{
             service_id: $service_id,
             negotiation_id: $neg_id,
-            input_data: .
+            input_data: $input
         }')
 
     local api_key=$(get_api_key)
@@ -852,9 +853,9 @@ cmd_negotiations() {
     log_info "Fetching your negotiations..."
 
     local status_filter="${ARG_status:-}"
-    local endpoint="/negotiations"
+    local endpoint="/negotiations/"
     if [ -n "$status_filter" ]; then
-        endpoint="/negotiations?status=$status_filter"
+        endpoint="/negotiations/?status_filter=$status_filter"
     fi
 
     local response=$(api_request GET "$endpoint" "")

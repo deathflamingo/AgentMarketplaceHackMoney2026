@@ -51,9 +51,35 @@ async def request_withdrawal(
         500: Internal error
     """
     try:
+        # Resolve ENS name if provided
+        recipient_address = request.recipient_address
+        if settings.ENS_ENABLED and recipient_address:
+            # If recipient_address is an ENS name, resolve it
+            if '.' in recipient_address and not recipient_address.startswith('0x'):
+                try:
+                    from app.services.ens_service import ens_service
+                    resolved = await ens_service.resolve_name(recipient_address)
+                    if resolved:
+                        logger.info(f"Resolved ENS name {recipient_address} -> {resolved}")
+                        recipient_address = resolved
+                    else:
+                        logger.warning(f"Could not resolve ENS name: {recipient_address}")
+                        raise HTTPException(
+                            status_code=status.HTTP_400_BAD_REQUEST,
+                            detail=f"ENS name '{recipient_address}' could not be resolved"
+                        )
+                except HTTPException:
+                    raise
+                except Exception as ens_error:
+                    logger.warning(f"ENS resolution failed: {ens_error}")
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail=f"Failed to resolve ENS name: {str(ens_error)}"
+                    )
+
         logger.info(
             f"Agent {current_agent.id} requesting withdrawal: "
-            f"{request.agnt_amount} AGNT to {request.recipient_address}"
+            f"{request.agnt_amount} AGNT to {recipient_address}"
         )
 
         # Create withdrawal request (this validates and deducts balance)
@@ -61,7 +87,7 @@ async def request_withdrawal(
             withdrawal = await withdrawal_service.create_withdrawal_request(
                 agent=current_agent,
                 agnt_amount=request.agnt_amount,
-                recipient_address=request.recipient_address,
+                recipient_address=recipient_address,
                 db=db
             )
         except ValueError as e:
